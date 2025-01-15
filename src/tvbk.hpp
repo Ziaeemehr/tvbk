@@ -373,7 +373,7 @@ static void heun_step(
   const uint32_t num_node = cx.num_node, horizon = cx.num_time;
   float x[nsvar*width], xi[nsvar*width]={}, dx1[nsvar*width]={}, dx2[nsvar*width]={};
 
-  if (i_node==4) {
+  if (i_node==5) {
     // printf("I_c: ");
     // for (int i=0; i<width; i++) printf("%0.3f ", cx1[i]);
     // // for (int i=0; i<width; i++) printf("%0.3f ", params[i+5*width]);

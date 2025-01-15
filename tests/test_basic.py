@@ -294,7 +294,12 @@ mpr_default_theta = MPRTheta(
 def mpr_dfun(ys, c, p):
     r, V = ys
     r = r * (r > 0)
-    I_c = p.cr * c
+    if p.cr.ndim == 1:
+        I_c = p.cr * c[0]
+    elif p.cr.ndim == 2:
+        I_c = p.cr * c
+    else:
+        raise ValueError
     # with np.printoptions(precision=3):
     #     print(f'I_c: ', I_c)
     return np.array([
@@ -322,7 +327,7 @@ def run_sim_np(dfun, num_svar, buf_init,
     horizon: int,
     z_scale: np.ndarray=None,
     rng_seed=43, num_item=8, num_node=90, num_time=1000, dt=0.1,
-    num_skip=5
+    num_skip=5, adhoc=lambda x: x
 ):
     trace_shape = num_time // num_skip + 1, num_svar, num_node, num_item
     trace = np.zeros(trace_shape, 'f')
@@ -345,10 +350,12 @@ def run_sim_np(dfun, num_svar, buf_init,
         z = np.random.randn(2, num_node, num_item)*z_scale.reshape((2, 1, 1)) if z_scale is not None else 0
         dx1 = dfun(x, cx[0], sim_params)
         xi = x + dt*dx1 + z
-        xi[0] = xi[0]*(xi[0] > 0)
+        # xi[0] = xi[0]*(xi[0] > 0)
+        xi = adhoc(xi)
         dx2 = dfun(xi, cx[1], sim_params)
         nx = x + dt/2*(dx1 + dx2) + z
-        nx[0] = nx[0]*(nx[0] > 0)
+        # nx[0] = nx[0]*(nx[0] > 0)
+        nx = adhoc(nx)
         return nx
 
     x = np.zeros((num_svar, num_node, num_item), 'f')
@@ -411,13 +418,17 @@ def test_step_mpr():
     # set uniform I & cr
     p[...,1,:] += 2.0
     p[...,5,:] /= num_node
+
+    def adhoc(x):
+        x[0] = x[0]*(x[0] > 0)
+        return x
     
     trace_np = run_sim_np(
         mpr_dfun, num_svar, buf_init_np, s_w, idelays,
         MPRTheta(*p.transpose(2,1,0,3).reshape(num_parm,num_node,num_batch*8)),
         # mpr_default_theta,
         horizon, num_item=num_batch*8, num_node=num_node, num_time=num_time,
-        dt=dt, num_skip=num_skip
+        dt=dt, num_skip=num_skip, adhoc=adhoc
     )
     trace_np = trace_np.reshape(-1, num_svar, num_node, num_batch, 8).transpose( 0, 3, 1, 2, 4 )
 
@@ -467,3 +478,122 @@ def test_step_mpr():
     pl.plot(_c, 'k-', alpha=0.4)
     pl.savefig('test_mpr2.jpg')
     """
+
+@pytest.mark.benchmark(group='sim_mpr')
+def test_perf_step_mpr_np(benchmark):
+    cv = 1.0
+    dt = 0.01
+    num_node = 90
+    num_skip = 20
+    num_time = 1000
+    horizon = 256
+    num_batch = 4
+    sparsity = 0.5 # nnz=0.5*num_node**2
+
+    weights, lengths, spw_j = rand_weights(
+        seed=46,
+        sparsity=sparsity, num_node=num_node, horizon=horizon,
+        dt=dt, cv=cv)
+    weights = np.ones_like(weights)
+    s_w = scipy.sparse.csr_matrix(weights)
+    idelays = (lengths[weights != 0]/cv/dt).astype(np.uint32)+2
+    # idelays = idelays//25 + 2
+    assert idelays.max() < horizon
+    assert idelays.min() >= 2
+    cx = m.Cx8s(num_node, horizon, num_batch)
+    conn = m.Conn(num_node, s_w.data.size)  #, mode=mode)
+    conn.weights[:] = s_w.data.astype(np.float32)
+    conn.indptr[:] = s_w.indptr.astype(np.uint32)
+    conn.indices[:] = s_w.indices.astype(np.uint32)
+    conn.idelays[:] = idelays
+
+    assert cx.buf.shape == (num_batch, num_node, horizon, 8)
+    # then we can test
+    buf_val = np.r_[:1.0:1j*num_batch*num_node *
+                      horizon * 8].reshape(num_batch, num_node, horizon, 8).astype('f')*4.0
+    cx.buf[:] = buf_val
+    np.testing.assert_equal(buf_val, cx.buf)
+    cx.cx1[:] = cx.cx2[:] = 0.0
+
+    buf_init_np = buf_val.transpose(1,2,0,3).reshape(num_node, horizon, num_batch*8)
+
+    # cx, c, x, p, t0, nt, dt
+    num_svar, num_parm = 2, 6
+    x = np.zeros((num_batch, num_svar, num_node, 8), 'f')
+    p = np.zeros((num_batch, num_node, num_parm, 8), 'f')
+    p[:] = p + np.array(mpr_default_theta
+                        ).reshape(1,1,-1,1) + np.random.randn(*p.shape)*0.1
+    # set uniform I & cr
+    p[...,1,:] += 2.0
+    p[...,5,:] /= num_node
+
+    def adhoc(x):
+        x[0] = x[0]*(x[0] > 0)
+        return x
+    
+    def run1():
+        trace_np = run_sim_np(
+            mpr_dfun, num_svar, buf_init_np, s_w, idelays,
+            MPRTheta(*p.transpose(2,1,0,3).reshape(num_parm,num_node,num_batch*8)),
+            # mpr_default_theta,
+            horizon, num_item=num_batch*8, num_node=num_node, num_time=num_time,
+            dt=dt, num_skip=num_skip, adhoc=adhoc
+        )
+    
+    benchmark(run1)
+
+
+@pytest.mark.benchmark(group='sim_mpr')
+def test_perf_step_mpr_cpp(benchmark):
+    cv = 1.0
+    dt = 0.01
+    num_node = 90
+    num_skip = 20
+    num_time = 1000
+    horizon = 256
+    num_batch = 4
+    sparsity = 0.5 # nnz=0.5*num_node**2
+
+    weights, lengths, spw_j = rand_weights(
+        seed=46,
+        sparsity=sparsity, num_node=num_node, horizon=horizon,
+        dt=dt, cv=cv)
+    weights = np.ones_like(weights)
+    s_w = scipy.sparse.csr_matrix(weights)
+    idelays = (lengths[weights != 0]/cv/dt).astype(np.uint32)+2
+    # idelays = idelays//25 + 2
+    assert idelays.max() < horizon
+    assert idelays.min() >= 2
+    cx = m.Cx8s(num_node, horizon, num_batch)
+    conn = m.Conn(num_node, s_w.data.size)  #, mode=mode)
+    conn.weights[:] = s_w.data.astype(np.float32)
+    conn.indptr[:] = s_w.indptr.astype(np.uint32)
+    conn.indices[:] = s_w.indices.astype(np.uint32)
+    conn.idelays[:] = idelays
+
+    assert cx.buf.shape == (num_batch, num_node, horizon, 8)
+    # then we can test
+    buf_val = np.r_[:1.0:1j*num_batch*num_node *
+                      horizon * 8].reshape(num_batch, num_node, horizon, 8).astype('f')*4.0
+    cx.buf[:] = buf_val
+    np.testing.assert_equal(buf_val, cx.buf)
+    cx.cx1[:] = cx.cx2[:] = 0.0
+
+    buf_init_np = buf_val.transpose(1,2,0,3).reshape(num_node, horizon, num_batch*8)
+
+    # cx, c, x, p, t0, nt, dt
+    num_svar, num_parm = 2, 6
+    x = np.zeros((num_batch, num_svar, num_node, 8), 'f')
+    p = np.zeros((num_batch, num_node, num_parm, 8), 'f')
+    p[:] = p + np.array(mpr_default_theta
+                        ).reshape(1,1,-1,1) + np.random.randn(*p.shape)*0.1
+    # set uniform I & cr
+    p[...,1,:] += 2.0
+    p[...,5,:] /= num_node
+
+    def run1():
+        # trace_c = np.zeros((num_time//num_skip, num_batch, num_svar, num_node, 8)
+        for t0 in range(num_time // num_skip):
+            m.step_mpr8(cx, conn, x, p, t0*num_skip, num_skip, dt)
+    
+    benchmark(run1)
