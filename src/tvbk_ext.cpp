@@ -1,3 +1,4 @@
+#include <format>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
@@ -15,8 +16,10 @@ template<typename shape>
 using farr = nb::ndarray<float, nb::numpy, nb::device::cpu, shape, nb::c_contig>;
 
 // boilerplate for declaring a model stepping function
-template <typename M, typename model, int width> void decl_step(M m, const char *name)
+template <typename model, typename M, int width=8> void decl_step(M m)
 {
+  char name[64];
+  snprintf(name, 64, "step_%s", model::name);
   m.def(name,
     [](const tvbk::cxbs<width> &cx, const tvbk::conn &c,
     farr<nb::shape<-1,model::num_svar,-1,width>> &x,
@@ -35,7 +38,6 @@ template <typename M, typename model, int width> void decl_step(M m, const char 
         p.shape(1) == cx.num_node, t0, nt, dt);
     }, "cx"_a, "c"_a, "x"_a, "p"_a, "t0"_a, "nt"_a, "dt"_a);
 }
-
 
 NB_MODULE(tvbk_ext, m) {
 
@@ -156,41 +158,7 @@ NB_MODULE(tvbk_ext, m) {
       tvbk::mpr::dfun<8>((float *)dx.data(), (float *)x.data(), (float *)c.data(), (float *)p.data());
     }, "dx"_a, "x"_a, "c"_a, "p"_a);
 
-  m.def("step_jr8",
-    [](const tvbk::cxbs<8> &cx, const tvbk::conn &c,
-    farr<nb::shape<-1,tvbk::jr::num_svar,-1,8>> &x,
-    farr<nb::shape<-1,-1,tvbk::jr::num_parm,8>> &p,
-    uint32_t t0, uint32_t nt, float dt)
-    {
-      // check x.shape[0] == p.shape[0] == cx.num_batch
-      if (!(x.shape(0) == p.shape(0) && x.shape(0) == cx.num_batch))
-        throw std::runtime_error("batch shapes don't match: check that x.shape[0] == p.shape[0] == cx.num_batch");
-      // check x.shape[2] == cx.num_node == p.shape[1]
-      if (!(x.shape(2) == cx.num_node && x.shape(2)))
-        throw std::runtime_error("node shapes don't match: check that x.shape[2] == cx.num_node");
-      if (!(p.shape(1) == cx.num_node || p.shape(1) == 1))
-        throw std::runtime_error("p.shape[1] must be num_node or 1.");
-      tvbk::step_batches<tvbk::jr,8>(cx, c, (float *)x.data(), (float *)p.data(), 
-        p.shape(1) == cx.num_node, t0, nt, dt);
-    }, "cx"_a, "c"_a, "x"_a, "p"_a, "t0"_a, "nt"_a, "dt"_a);
-
-  m.def("step_mpr8",
-    [](const tvbk::cxbs<8> &cx, const tvbk::conn &c,
-    farr<nb::shape<-1,tvbk::mpr::num_svar,-1,8>> &x,
-    farr<nb::shape<-1,-1,tvbk::mpr::num_parm,8>> &p,
-    uint32_t t0, uint32_t nt, float dt)
-    {
-      // check x.shape[0] == p.shape[0] == cx.num_batch
-      if (!(x.shape(0) == p.shape(0) && x.shape(0) == cx.num_batch))
-        throw std::runtime_error("batch shapes don't match: check that x.shape[0] == p.shape[0] == cx.num_batch");
-      // check x.shape[2] == cx.num_node == p.shape[1]
-      if (!(x.shape(2) == cx.num_node && x.shape(2)))
-        throw std::runtime_error("node shapes don't match: check that x.shape[2] == cx.num_node");
-      if (!(p.shape(1) == cx.num_node || p.shape(1) == 1))
-        throw std::runtime_error("p.shape[1] must be num_node or 1.");
-      tvbk::step_batches<tvbk::mpr,8>(cx, c, (float *)x.data(), (float *)p.data(),
-        p.shape(1) == cx.num_node, t0, nt, dt);
-    }, "cx"_a, "c"_a, "x"_a, "p"_a, "t0"_a, "nt"_a, "dt"_a);
-
-  decl_step<decltype(m), tvbk::mpr2, 8>(m, "step_mpr2");
+  decl_step<tvbk::jr>(m);
+  decl_step<tvbk::mpr>(m);
+  decl_step<tvbk::mpr2>(m);
 }

@@ -434,7 +434,7 @@ def test_step_mpr():
 
     trace_c = np.zeros_like(trace_np) # (num_time//num_skip, num_batch, num_svar, num_node, 8)
     for t0 in range(trace_c.shape[0]):
-        m.step_mpr8(cx, conn, x, p, t0*num_skip, num_skip, dt)
+        m.step_mpr(cx, conn, x, p, t0*num_skip, num_skip, dt)
         trace_c[t0] = x
         # for i in range(num_svar):
         #     a, b = trace_c[t0, 0, i], trace_np[t0, 0, i]
@@ -548,10 +548,10 @@ def test_perf_step_mpr_cpp(benchmark):
     cv = 1.0
     dt = 0.01
     num_node = 90
-    num_skip = 100
+    num_skip = 1000
     num_time = 10000
     horizon = 256
-    num_batch = 8
+    num_batch = 64
     sparsity = 0.3 # nnz=0.5*num_node**2
 
     weights, lengths, spw_j = rand_weights(
@@ -596,7 +596,7 @@ def test_perf_step_mpr_cpp(benchmark):
     def run1():
         # trace_c = np.zeros((num_time//num_skip, num_batch, num_svar, num_node, 8)
         for t0 in range(num_time // num_skip):
-            m.step_mpr8(cx, conn, x, p, t0*num_skip, num_skip, dt)
+            m.step_mpr(cx, conn, x, p, t0*num_skip, num_skip, dt)
     
     benchmark(run1)
 

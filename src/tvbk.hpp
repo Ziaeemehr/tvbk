@@ -308,7 +308,7 @@ static void INLINE cx_j_bs(
 
 struct jr {
   static const uint32_t num_svar=6, num_parm=14, num_cvar=1;
-  static constexpr const char *const parms = "A,B,a,b,v0,nu_max,r,J,a_1,a_2,a_3,a_4,mu,I";
+  static constexpr const char *const parms = "A,B,a,b,v0,nu_max,r,J,a_1,a_2,a_3,a_4,mu,I", *const name="jr";
   // with width=8 & -O3 -mavx2 -fveclib=libmvec -ffast-math & __restrict inputs,
   // clang generates straight asm no jumps
   // gcc also good, but drop -fveclib=libmvec
@@ -338,7 +338,7 @@ struct jr {
 
 struct mpr {
   static const uint32_t num_svar=2, num_parm=6, num_cvar=1;
-  static constexpr const char * const parms = "tau I Delta J eta cr";
+  static constexpr const char * const parms = "tau I Delta J eta cr", * const name = "mpr";
   static constexpr const float default_parms[6] = {1.0, 0.0, 1.0, 15.0, -5.0, 1.0};
   template <int width>
   INLINE static void
@@ -363,7 +363,7 @@ struct mpr {
 
 struct mpr2 {
   static const uint32_t num_svar=2, num_parm=2, num_cvar=1;
-  static constexpr const char * const parms = "I cr";
+  static constexpr const char * const parms = "I cr", * const name = "mpr2";
   static constexpr const float default_parms[6] = {0.0, 1.0};
   template <int width>
   INLINE static void
