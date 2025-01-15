@@ -361,6 +361,34 @@ struct mpr {
   }
 };
 
+struct mpr2 {
+  static const uint32_t num_svar=2, num_parm=2, num_cvar=1;
+  static constexpr const char * const parms = "I cr";
+  static constexpr const float default_parms[6] = {0.0, 1.0};
+  template <int width>
+  INLINE static void
+  dfun(float *__restrict dx, const float *__restrict x, const float *__restrict c, const float *__restrict p)
+  {
+    #pragma omp simd
+    for (int i=0; i<width; i++) {
+      float r=x[i+0*width],V=x[i+1*width];
+      // 1.0, 0.0, 1.0, 15.0, -5.0, 1.0
+      float I=p[i],cr=p[i+width];
+      r = r * (r > 0);
+      const float tau=1.0f, Delta=1.0f, J=15.0f, eta=-5.0f;
+      // tau is 1, so drop the reciprocal
+      dx[i+0*width] = (Delta / (M_PI * tau) + 2.0f * r * V);
+      dx[i+1*width] = (V * V + eta + J * tau * r + I + cr * c[i] - (M_PI * M_PI) * (r * r) * (tau * tau));
+    }
+  }
+  template <int width> INLINE static void adhoc(float *x) {
+    #pragma omp simd
+    for (int i=0; i<width; i++) {
+      x[i] = x[i] * (x[i] > 0);
+    }
+  }
+};
+
 // steps a model for single batch of nodes size width assuming
 // precomputed cx1 & cx2, and updates buffer in cx
 template <typename model, int width=8>
@@ -413,11 +441,12 @@ static void heun_step(
 }
 
 template <typename model, int width=8>
-static void INLINE step_batch(
+static void step_batch(
   const cxb<width> &cx, const conn &c,
   float *x, // (num_svar, num_node, width)
   // TODO try x layout as (num_node, num_svar, width)
   const float *p, // (num_node, num_parm, width)
+  const bool p_varies_node,
   const uint32_t t0, const uint32_t nt, const float dt)
 {
   float cx1[width], cx2[width];
@@ -425,27 +454,33 @@ static void INLINE step_batch(
     for (uint32_t i = 0; i < cx.num_node; i++) {
       apply_all_node<width>(cx, c, t, i, cx1, cx2);
       heun_step<model, width>(cx, x, cx1, cx2, 
-        p+i*model::num_parm*width,
+        p_varies_node ? p+i*model::num_parm*width : p,
         i, t, dt);
     }
   }
 }
 
 template <typename model, int width=8>
-static void INLINE step_batches(
+static void step_batches(
   const cxbs<width> &cx, const conn &c,
   float *x, // (num_batch, num_svar, num_node, width)
   // TODO try x layout as (num_node, num_svar, width)
-  const float *p, // (num_batch, num_node, num_parm, width)
+  const float *p, 
+  const bool p_varies_node,
   const uint32_t t0, const uint32_t nt, const float dt)
 {
   #pragma omp parallel for
-  for (int b=0; b<cx.num_batch; b++)
-    step_batch<model, width>(
-      cx.batch(b), c,
-      x + b * model::num_svar * cx.num_node * width,
-      p + b * cx.num_node * model::num_parm * width,
-      t0, nt, dt);
+  for (int b=0; b<cx.num_batch; b++) {
+    const float *pb;
+    float *xb=x + b * model::num_svar * cx.num_node * width;
+    // when p varies per node, shape is // (num_batch, num_node, num_parm, width)
+    if (p_varies_node)
+      pb = p + b * cx.num_node * model::num_parm * width;
+    // otherwise p varies only per batch & item, (num_batch, num_parm, width)
+    else
+      pb = p + b * model::num_parm * width;
+    step_batch<model, width>(cx.batch(b), c, xb, pb, p_varies_node, t0, nt, dt);
+  }
 }
 
 } // namespace tvbk
