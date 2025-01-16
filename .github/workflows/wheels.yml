@@ -46,7 +46,7 @@ jobs:
     - uses: pypa/cibuildwheel@v2.22
       env:
         # skip lots of irrelevant stuff to keep gha fast
-        CIBW_SKIP: 'cp39* cp310* cp311* cp313* pp* *i686 *win32 *musl* *universal2'
+        CIBW_SKIP: 'pp* *i686 *win32 *musl* *universal2'
     
     - name: Verify clean directory
       run: git diff --exit-code
@@ -97,8 +97,11 @@ jobs:
         pattern: dist-*
         merge-multiple: true
 
-    - name: debug wheel location
-      run: find . -name '*.whl'
+    - name: fix wheel location
+      run: |
+        mkdir -p dist
+        cp -v *.whl dist/
+        find . -name '*.whl'
 
     - uses: pypa/gh-action-pypi-publish@release/v1
       with:
@@ -108,5 +111,5 @@ jobs:
     - name: Upload wheels
       uses: actions/upload-artifact@v4
       with:
-        path: wheelhouse/*.whl
-        name: dist-pyodide
+        path: dist/*.whl
+        name: wheels.zip
