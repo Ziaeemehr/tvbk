@@ -1,4 +1,3 @@
-#include <format>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
