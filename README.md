@@ -1,7 +1,10 @@
-tvbk
-====
+# tvbk
 
-Take 2 on automating wheels for all platforms for tvbk.  My local dev setup is
+Computational kernels for tvb.
+
+## setup
+
+My local dev setup is
 in VS Code w/ Python, C/C++ extensions, and a venv setup for incremental rebuilds like so
 ```bash
 rm -rf build env
@@ -16,15 +19,13 @@ taken into account, just running
 ```
 pytest
 ```
-is enough.  Maybe you delete the build to start over? Force uv to reinstall
-```
-uv pip install --no-build-isolation -Ceditable.rebuild=true --force-reinstall -ve .
-```
+will rebuild the C++ if required.  This also occurs on import in e.g. a Jupyter kernel.
 
 ## next
 
+- add sde heun steppers
+- all the neural mass models
 - make first release to start integrating w/ TVB
 - refactor buffers
 - rm scipy dep for sparsity
-- 8-wide conn kernels
-- simd/or not step kernels
+- cuda/hip/webgpu or something
