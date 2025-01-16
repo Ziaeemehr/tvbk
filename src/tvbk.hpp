@@ -1,6 +1,8 @@
 #pragma once
 #include <stdint.h>
 #include <math.h>
+#include <vector>
+#include <thread>
 
 // at -O3 -fopen-simd, these kernels result in compact asm
 #ifdef _MSC_VER
@@ -19,11 +21,18 @@ template <int width> INLINE static void name (__VA_ARGS__) \
 #define kernel(name, expr, args...) \
 template <int width> INLINE static void name (args) \
 { \
-  _Pragma("omp simd") \
+  _Pragma("clang loop unroll(full)") \
   for (int i=0; i < width; i++) \
     expr;\
 }
 #endif
+
+// MSVC and others may not define M_PI?
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+#define M_PI_F ((float) M_PI)
 
 namespace tvbk {
 
@@ -150,6 +159,13 @@ INLINE void randn(uint64_t *seed, int n, float *out) {
     out[i] = randn1(seed);
 }
 
+template <int width>
+INLINE void krandn(uint64_t **seed, float *out) {
+  #pragma omp simd
+  for (int i = 0; i < width; i++)
+    out[i] = randn1(seed[i]);
+}
+
 /* simple stuff */
 kernel(inc,      x[i]                    += w*y[i], float *x, float *y, float w)
 kernel(adds,     x[i]                         += a, float *x, float a)
@@ -222,7 +238,7 @@ template <int width=8>
   const uint32_t *indices = c.indices + nz;
   const uint32_t *idelays = c.idelays + nz;
   float *buf = cx.buf;
-#pragma omp simd
+#pragma clang loop vectorize_width(4)
   for (uint32_t i = 0; i < 4; i++) {
     w[i] = weights[i];
     uint32_t t0 = H + i_time - idelays[i];
@@ -299,67 +315,162 @@ static void INLINE cx_j_bs(
     cx_j_b<width>(cx.batch(i), c, t);
 }
 
-/* WIP
-
-template <uint8_t nsvar, uint8_t width, typename dfun>
-struct model
-{
-  const uint32_t num_node, horizon, horizon_minus_1;
-  float *states, *params, dt;
-  const cx &cx;
-  
-  void step(const uint32_t i_node, const uint32_t i_time,
-            const float* cx1, const float* cx2)
+struct jr {
+  static const uint32_t num_svar=6, num_parm=14, num_cvar=1;
+  static constexpr const char *const parms = "A,B,a,b,v0,nu_max,r,J,a_1,a_2,a_3,a_4,mu,I", *const name="jr";
+  // with width=8 & -O3 -mavx2 -fveclib=libmvec -ffast-math & __restrict inputs,
+  // clang generates straight asm no jumps
+  // gcc also good, but drop -fveclib=libmvec
+  template <int width>
+  INLINE static void
+  dfun(float *__restrict dx, const float *__restrict x, const float *__restrict c, const float *__restrict p)
   {
-    float x[nsvar*width], xi[nsvar*width], dx1[nsvar*width], dx2[nsvar*width], z[nsvar*width];
-    for (int svar=0; svar < nsvar; svar++)
-    {
-        load<width>(x+svar*width, states+width*(i_node + num_node*svar));
-        zero<width>(xi+svar*width);
-        zero<width>(dx1+svar*width);
-        zero<width>(dx2+svar*width);
-        zero<width>(z+svar*width);
-    }
-    
-    dfun(x, x+width, cx1, params, params+width, params+2*width, dx1, dx1+width);
-
-    for (int svar=0; svar < nsvar; svar++)
-        heunpred<width>(x+svar*width, xi+svar*width, dx1+svar*width, dt);
-
-    dfun(xi, xi + width, cx2, params, params + width, params + 2 * width, dx2,
-         dx2 + width);
-    for (int svar=0; svar < nsvar; svar++)
-    {
-        heuncorr<width>(x+svar*width, dx1+svar*width, dx2+svar*width, dt);
-        load<width>(states+width*(i_node + num_node*svar), x+svar*width);
-    }
-    int write_time = i_time & horizon_minus_1;
-    load<width>(cx.buf + width * (i_node * horizon + write_time),
-                states + width * (i_node + num_node * 0));
-  }
-};
-
-template <uint8_t width>
-struct dfun_linear {
-  void operator()(const float *x, const float *y, const float *cx,
-                  const float *a, const float *tau, const float *k, float *dx,
-                  float *dy) {
-#pragma omp simd
+    #pragma omp simd
     for (int i=0; i<width; i++) {
-      dx[i] = -x[i] + cx[i];
-      dy[i] = -y[i];
+      float y0=x[i], y1=x[i+width], y2=x[i+2*width], y3=x[i+3*width], y4=x[i+4*width], y5=x[i+5*width];
+      float A=p[i+0*width],B=p[i+1*width],a=p[i+2*width],b=p[i+3*width],v0=p[i+4*width],nu_max=p[i+5*width],r=p[i+6*width],J=p[i+7*width],
+        a_1=p[i+8*width],a_2=p[i+9*width],a_3=p[i+10*width],a_4=p[i+11*width],mu=p[i+12*width],I=p[i+13*width];
+      float sigm_y1_y2 = 2.0f * nu_max / (1.0f + expf(r * (v0 - (y1 - y2))));
+      float sigm_y0_1  = 2.0f * nu_max / (1.0f + expf(r * (v0 - (a_1 * J * y0))));
+      float sigm_y0_3  = 2.0f * nu_max / (1.0f + expf(r * (v0 - (a_3 * J * y0))));
+      dx[i+0*width] = y3;
+      dx[i+1*width] = y4;
+      dx[i+2*width] = y5;
+      dx[i+3*width] = A * a * sigm_y1_y2 - 2.0f * a * y3 - a *a* 2.f * y0;
+      dx[i+4*width] = A * a * (mu + a_2 * J * sigm_y0_1 + c[i]) - 2.0f * a * y4 - a *a * y1;
+      dx[i+5*width] = B * b * (a_4 * J * sigm_y0_3) - 2.0f * b * y5 - b *b * y2;
+    }
+  }
+  // adhoc adjustments to state variables after heun stages, e.g. to enforce constraints
+  template <int width> INLINE static void adhoc(float *) { }
+};
+
+struct mpr {
+  static const uint32_t num_svar=2, num_parm=6, num_cvar=1;
+  static constexpr const char * const parms = "tau I Delta J eta cr", * const name = "mpr";
+  static constexpr const float default_parms[6] = {1.0, 0.0, 1.0, 15.0, -5.0, 1.0};
+  template <int width>
+  INLINE static void
+  dfun(float *__restrict dx, const float *__restrict x, const float *__restrict c, const float *__restrict p)
+  {
+    #pragma omp simd
+    for (int i=0; i<width; i++) {
+      float r=x[i+0*width],V=x[i+1*width];
+      float tau=p[i+0*width],I=p[i+1*width],Delta=p[i+2*width],J=p[i+3*width],eta=p[i+4*width],cr=p[i+5*width];
+      r = r * (r > 0);
+      dx[i+0*width] = (1 / tau) * (Delta / (M_PI_F * tau) + 2.0f * r * V);
+      dx[i+1*width] = (1 / tau) * (V * V + eta + J * tau * r + I + cr * c[i] - (M_PI_F * M_PI_F) * (r * r) * (tau * tau));
+    }
+  }
+  template <int width> INLINE static void adhoc(float *x) {
+    #pragma omp simd
+    for (int i=0; i<width; i++) {
+      x[i] = x[i] * (x[i] > 0);
     }
   }
 };
 
-template <uint8_t width> struct linear : model<2,width,dfun_linear<width>> { };
+// steps a model for single batch of nodes size width assuming
+// precomputed cx1 & cx2, and updates buffer in cx
+template <typename model, int width=8>
+static void heun_step(
+  const cxb<width> &cx, float * __restrict states, 
+  const float*  __restrict cx1, const float*  __restrict cx2, const float * __restrict params,
+  const uint32_t i_node, const uint32_t i_time, const float dt
+)
+{
+  constexpr uint8_t nsvar = model::num_svar;
+  const uint32_t num_node = cx.num_node, horizon = cx.num_time;
+  float x[nsvar*width], xi[nsvar*width]={}, dx1[nsvar*width]={}, dx2[nsvar*width]={};
 
-void foobar() {
-    linear<8> l {4, 5, 6};
-    uint32_t m=2,n=5;
-    float cx1[8], cx2[8];
-    l.step(m, n, cx1, cx2);
+  // load states
+#pragma clang loop unroll(full)
+  for (int svar=0; svar < nsvar; svar++) {
+    load<width>(x+svar*width, states+width*(i_node + num_node*svar));
+    zero<width>(xi+svar*width);
+    zero<width>(dx1+svar*width);
+    zero<width>(dx2+svar*width);
+  }
+
+  // Heun stage 1
+  model::template dfun<width>(dx1, x, cx1, params);
+#pragma clang loop unroll(full)
+  for (int svar=0; svar < nsvar; svar++)
+      heunpred<width>(x+svar*width, xi+svar*width, dx1+svar*width, dt);
+  model::template adhoc<width>(xi);
+
+  // Heun stage 2
+  model::template dfun<width>(dx2, xi, cx2, params);
+#pragma clang loop unroll(full)
+  for (int svar=0; svar < nsvar; svar++)
+      heuncorr<width>(x+svar*width, dx1+svar*width, dx2+svar*width, dt);
+  model::template adhoc<width>(x);
+#pragma clang loop unroll(full)
+  for (int svar=0; svar < nsvar; svar++)
+      load<width>(states+width*(i_node + num_node*svar), x+svar*width);
+
+  // update buffer
+  // TODO move out, to handle multiple cvars/cx/conns
+  int write_time = i_time & (cx.num_time - 1);
+  load<width>(cx.buf + width * (i_node * horizon + write_time),x);
 }
-*/
+
+template <typename model, int width=8>
+static void step_batch(
+  const cxb<width> &cx, const conn &c,
+  float *x, // (num_svar, num_node, width)
+  // TODO try x layout as (num_node, num_svar, width)
+  const float *p, // (num_node, num_parm, width)
+  const bool p_varies_node,
+  const uint32_t t0, const uint32_t nt, const float dt)
+{
+  float cx1[width], cx2[width];
+  for (uint32_t t=t0; t<(t0+nt); t++) {
+    for (uint32_t i = 0; i < cx.num_node; i++) {
+      apply_all_node<width>(cx, c, t, i, cx1, cx2);
+      heun_step<model, width>(cx, x, cx1, cx2, 
+        p_varies_node ? p+i*model::num_parm*width : p,
+        i, t, dt);
+    }
+  }
+}
+
+template <typename model, int width=8>
+static void step_batches(
+  const cxbs<width> &cx, const conn &c,
+  float *x, // (num_batch, num_svar, num_node, width)
+  // TODO try x layout as (num_node, num_svar, width)
+  const float *p, 
+  const bool p_varies_node,
+  const uint32_t t0, const uint32_t nt, const float dt)
+{
+// use omp if available or emscripten since std::thread causes emscripten to fail
+#if _OPENMP || __EMSCRIPTEN__
+  #pragma omp parallel for
+#else
+  std::vector<std::thread> threads;
+#endif
+  for (int b=0; b<cx.num_batch; b++) {
+    const float *pb;
+    float *xb=x + b * model::num_svar * cx.num_node * width;
+    // when p varies per node, shape is // (num_batch, num_node, num_parm, width)
+    if (p_varies_node)
+      pb = p + b * cx.num_node * model::num_parm * width;
+    // otherwise p varies only per batch & item, (num_batch, num_parm, width)
+    else
+      pb = p + b * model::num_parm * width;
+#if _OPENMP || __EMSCRIPTEN__
+    step_batch<model, width>(cx.batch(b), c, xb, pb, p_varies_node, t0, nt, dt);
+#else
+    threads.emplace_back(
+      step_batch<model, width>, cx.batch(b), c, xb, pb, p_varies_node, t0, nt, dt);
+#endif
+  }
+
+#if _OPENMP || __EMSCRIPTEN__
+#else
+  for (auto &th : threads) th.join();
+#endif
+}
 
 } // namespace tvbk

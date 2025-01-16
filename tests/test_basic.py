@@ -2,6 +2,7 @@ import tvbk as m
 import numpy as np
 import scipy.sparse
 import pytest
+import collections
 
 @pytest.mark.benchmark(group='randn')
 def test_popcount_randn_perf(benchmark):
@@ -236,3 +237,363 @@ def test_conn_simd_batch_numpy(benchmark):
         for t in range(128):
             cx = cfun_np(t)
     benchmark(run)
+
+
+# from vbjax
+JRTheta = collections.namedtuple(
+    typename='JRTheta',
+    field_names='A B a b v0 nu_max r J a_1 a_2 a_3 a_4 mu I'.split(' '))
+
+jr_default_theta = JRTheta(
+    A=3.25, B=22.0, a=0.1, b=0.05, v0=5.52, nu_max=0.0025, 
+    r=0.56, J=135.0, a_1=1.0, a_2=0.8, a_3=0.25, a_4=0.25, mu=0.22, I=0.0)
+    
+def dfun_jr_np(ys, cs, p):
+    y0, y1, y2, y3, y4, y5 = ys
+    c, = cs
+
+    sigm_y1_y2 = 2.0 * p.nu_max / (1.0 + np.exp(p.r * (p.v0 - (y1 - y2))))
+    sigm_y0_1  = 2.0 * p.nu_max / (1.0 + np.exp(p.r * (p.v0 - (p.a_1 * p.J * y0))))
+    sigm_y0_3  = 2.0 * p.nu_max / (1.0 + np.exp(p.r * (p.v0 - (p.a_3 * p.J * y0))))
+
+    return np.array([y3,
+        y4,
+        y5,
+        p.A * p.a * sigm_y1_y2 - 2.0 * p.a * y3 - p.a ** 2 * y0,
+        p.A * p.a * (p.mu + p.a_2 * p.J * sigm_y0_1 + c)
+            - 2.0 * p.a * y4 - p.a ** 2 * y1,
+        p.B * p.b * (p.a_4 * p.J * sigm_y0_3) - 2.0 * p.b * y5 - p.b ** 2 * y2,
+                     ])
+
+def test_jr8():
+    for i in range(1024):
+        dx = np.zeros((6, 8), 'f')
+        x = np.random.randn(*dx.shape).astype('f')+10
+        c = np.random.randn(1,8).astype('f') + 10
+        p = np.tile(np.array(jr_default_theta).astype('f'), (8, 1)).T.copy()
+        assert p.shape == (14, 8)
+        m.dfun_jr8(dx, x, c, p)
+        dx_np = dfun_jr_np(x, c, JRTheta(*p))
+        np.testing.assert_allclose(dx, dx_np, 0.15, 0.1)
+
+
+# Montbrio-Pazo-Roxin
+MPRTheta = collections.namedtuple(
+    typename='MPRTheta',
+    field_names='tau I Delta J eta cr'.split(' '))
+
+mpr_default_theta = MPRTheta(
+    tau=1.0,
+    I=0.0,
+    Delta=1.0,
+    J=15.0,
+    eta=-5.0,
+    cr=1.0
+)
+
+def mpr_dfun(ys, c, p):
+    r, V = ys
+    r = r * (r > 0)
+    if p.cr.ndim == 1:
+        I_c = p.cr * c[0]
+    elif p.cr.ndim == 2:
+        I_c = p.cr * c
+    else:
+        raise ValueError
+    # with np.printoptions(precision=3):
+    #     print(f'I_c: ', I_c)
+    return np.array([
+        (1 / p.tau) * (p.Delta / (np.pi * p.tau) + 2 * r * V),
+        (1 / p.tau) * (V ** 2 + p.eta + p.J * p.tau *
+         r + p.I + I_c - (np.pi ** 2) * (r ** 2) * (p.tau ** 2))
+    ])
+
+def test_mpr8():
+    for i in range(1024):
+        dx = np.zeros((2, 8), 'f')
+        x = np.random.randn(*dx.shape).astype('f')/5+np.c_[0.5,-2.0].T
+        c = np.random.randn(1,8).astype('f')/2
+        p = np.tile(np.array(mpr_default_theta).astype('f'), (8, 1)).T.copy()
+        assert p.shape == (6, 8)
+        m.dfun_mpr8(dx, x, c, p)
+        dx_np = mpr_dfun(x, c, MPRTheta(*p))
+        np.testing.assert_allclose(dx, dx_np, 0.01, 0.01)
+
+# ref impl for sim w/ numpy
+def run_sim_np(dfun, num_svar, buf_init,
+    csr_weights: scipy.sparse.csr_matrix,
+    idelays: np.ndarray,
+    sim_params: np.ndarray,
+    horizon: int,
+    z_scale: np.ndarray=None,
+    rng_seed=43, num_item=8, num_node=90, num_time=1000, dt=0.1,
+    num_skip=5, adhoc=lambda x: x
+):
+    trace_shape = num_time // num_skip + 1, num_svar, num_node, num_item
+    trace = np.zeros(trace_shape, 'f')
+    assert idelays.max() < horizon-2
+    idelays2 = horizon - np.c_[idelays, idelays-1].T
+    assert idelays2.shape == (2, csr_weights.nnz)
+    buffer = np.zeros((num_node, horizon, num_item))
+    buffer[:] = buf_init
+
+
+    def cfun(t):
+        cx = buffer[csr_weights.indices, (t+idelays2) % horizon]
+        cx *= csr_weights.data.reshape(-1, 1)
+        cx = np.add.reduceat(cx, csr_weights.indptr[:-1], axis=1)
+        # with np.printoptions(precision=3):
+        #     print(f'cx1(t={t}):', cx[0,4])
+        return cx  # (2, num_node, num_item)
+
+    def heun(x, cx):
+        z = np.random.randn(2, num_node, num_item)*z_scale.reshape((2, 1, 1)) if z_scale is not None else 0
+        dx1 = dfun(x, cx[0], sim_params)
+        xi = x + dt*dx1 + z
+        # xi[0] = xi[0]*(xi[0] > 0)
+        xi = adhoc(xi)
+        dx2 = dfun(xi, cx[1], sim_params)
+        nx = x + dt/2*(dx1 + dx2) + z
+        # nx[0] = nx[0]*(nx[0] > 0)
+        nx = adhoc(nx)
+        return nx
+
+    x = np.zeros((num_svar, num_node, num_item), 'f')
+
+    for t in range(trace.shape[0]):
+        for tt in range(num_skip):
+            ttt = t*num_skip + tt
+            cx = cfun(ttt)
+            # print()
+            x = heun(x, cx)
+            buffer[:, ttt % horizon] = x[0]
+        trace[t] = x
+
+    return trace
+
+
+def test_step_mpr():
+    cv = 1.0
+    dt = 0.01
+    num_node = 90
+    num_skip = 10
+    num_time = 1000
+    horizon = 256
+    num_batch = 4
+    sparsity = 0.5 # nnz=0.5*num_node**2
+
+    weights, lengths, spw_j = rand_weights(
+        seed=46,
+        sparsity=sparsity, num_node=num_node, horizon=horizon,
+        dt=dt, cv=cv)
+    weights = np.ones_like(weights)
+    s_w = scipy.sparse.csr_matrix(weights)
+    idelays = (lengths[weights != 0]/cv/dt).astype(np.uint32)+2
+    # idelays = idelays//25 + 2
+    assert idelays.max() < horizon
+    assert idelays.min() >= 2
+    cx = m.Cx8s(num_node, horizon, num_batch)
+    conn = m.Conn(num_node, s_w.data.size)  #, mode=mode)
+    conn.weights[:] = s_w.data.astype(np.float32)
+    conn.indptr[:] = s_w.indptr.astype(np.uint32)
+    conn.indices[:] = s_w.indices.astype(np.uint32)
+    conn.idelays[:] = idelays
+
+    assert cx.buf.shape == (num_batch, num_node, horizon, 8)
+    # then we can test
+    buf_val = np.r_[:1.0:1j*num_batch*num_node *
+                      horizon * 8].reshape(num_batch, num_node, horizon, 8).astype('f')*4.0
+    cx.buf[:] = buf_val
+    np.testing.assert_equal(buf_val, cx.buf)
+    cx.cx1[:] = cx.cx2[:] = 0.0
+
+    buf_init_np = buf_val.transpose(1,2,0,3).reshape(num_node, horizon, num_batch*8)
+
+    # cx, c, x, p, t0, nt, dt
+    num_svar, num_parm = 2, 6
+    x = np.zeros((num_batch, num_svar, num_node, 8), 'f')
+    p = np.zeros((num_batch, num_node, num_parm, 8), 'f')
+    p[:] = p + np.array(mpr_default_theta
+                        ).reshape(1,1,-1,1) + np.random.randn(*p.shape)*0.1
+    # set uniform I & cr
+    p[...,1,:] += 2.0
+    p[...,5,:] /= num_node
+
+    def adhoc(x):
+        x[0] = x[0]*(x[0] > 0)
+        return x
+    
+    trace_np = run_sim_np(
+        mpr_dfun, num_svar, buf_init_np, s_w, idelays,
+        MPRTheta(*p.transpose(2,1,0,3).reshape(num_parm,num_node,num_batch*8)),
+        # mpr_default_theta,
+        horizon, num_item=num_batch*8, num_node=num_node, num_time=num_time,
+        dt=dt, num_skip=num_skip, adhoc=adhoc
+    )
+    trace_np = trace_np.reshape(-1, num_svar, num_node, num_batch, 8).transpose( 0, 3, 1, 2, 4 )
+
+    trace_c = np.zeros_like(trace_np) # (num_time//num_skip, num_batch, num_svar, num_node, 8)
+    for t0 in range(trace_c.shape[0]):
+        m.step_mpr(cx, conn, x, p, t0*num_skip, num_skip, dt)
+        trace_c[t0] = x
+        # for i in range(num_svar):
+        #     a, b = trace_c[t0, 0, i], trace_np[t0, 0, i]
+        #     for j in range(num_node):
+        #         np.testing.assert_allclose(a[j], b[j], 0.01, 0.01)                                                                                                                                                                                                                                                   
+    np.testing.assert_allclose(trace_c, trace_np, 0.01, 0.01)
+
+    """
+    import pylab as pl
+    # (num_time//num_skip, num_batch, num_svar, num_node, 8)
+    
+    ae = 0.0
+    iae = -1
+    for i in range(8):
+        for j in range(8):
+            s = 1  # V
+            pl.subplot(8,8,i*8+j+1);
+            _np = trace_np[:,0,s,i,j]
+            _c = trace_c[:,0,s,i,j]
+            if True:
+                _np, _c = np.diff(_np, axis=0), np.diff(_c, axis=0)
+            pl.plot(_np, 'r-', alpha=0.4)
+            pl.plot(_c, 'k-', alpha=0.4)
+            pl.xticks([]); pl.yticks([])
+            _ae = np.abs(_np-_c).sum()
+            if _ae > ae:
+                ae, iae = _ae, (i,j)
+    pl.tight_layout()
+    pl.savefig('test_mpr.jpg')
+    
+    pl.figure()
+    s, (i,j) = 1, iae
+    _np = trace_np[:,0,s,i,j]
+    _c = trace_c[:,0,s,i,j]
+    pl.subplot(211)
+    pl.plot(_np, 'r-', alpha=0.4)
+    pl.plot(_c, 'k-', alpha=0.4)
+    pl.subplot(212)
+    _np, _c = np.diff(_np, axis=0), np.diff(_c, axis=0)
+    pl.plot(_np, 'r-', alpha=0.4)
+    pl.plot(_c, 'k-', alpha=0.4)
+    pl.savefig('test_mpr2.jpg')
+    """
+
+@pytest.mark.benchmark(group='sim_mpr')
+def test_perf_step_mpr_np(benchmark):
+    cv = 1.0
+    dt = 0.01
+    num_node = 90
+    num_time = int(10. / dt)
+    num_skip = num_time//2
+    horizon = 256
+    num_batch = 4
+    sparsity = 0.5 # nnz=0.5*num_node**2
+
+    weights, lengths, spw_j = rand_weights(
+        seed=46,
+        sparsity=sparsity, num_node=num_node, horizon=horizon,
+        dt=dt, cv=cv)
+    weights = np.ones_like(weights)
+    s_w = scipy.sparse.csr_matrix(weights)
+    idelays = (lengths[weights != 0]/cv/dt).astype(np.uint32)+2
+    # idelays = idelays//25 + 2
+    assert idelays.max() < horizon
+    assert idelays.min() >= 2
+    cx = m.Cx8s(num_node, horizon, num_batch)
+    conn = m.Conn(num_node, s_w.data.size)  #, mode=mode)
+    conn.weights[:] = s_w.data.astype(np.float32)
+    conn.indptr[:] = s_w.indptr.astype(np.uint32)
+    conn.indices[:] = s_w.indices.astype(np.uint32)
+    conn.idelays[:] = idelays
+
+    assert cx.buf.shape == (num_batch, num_node, horizon, 8)
+    # then we can test
+    buf_val = np.r_[:1.0:1j*num_batch*num_node *
+                      horizon * 8].reshape(num_batch, num_node, horizon, 8).astype('f')*4.0
+    cx.buf[:] = buf_val
+    np.testing.assert_equal(buf_val, cx.buf)
+    cx.cx1[:] = cx.cx2[:] = 0.0
+
+    buf_init_np = buf_val.transpose(1,2,0,3).reshape(num_node, horizon, num_batch*8)
+
+    # cx, c, x, p, t0, nt, dt
+    num_svar, num_parm = 2, 6
+    x = np.zeros((num_batch, num_svar, num_node, 8), 'f')
+    p = np.zeros((num_batch, num_node, num_parm, 8), 'f')
+    p[:] = p + np.array(mpr_default_theta
+                        ).reshape(1,1,-1,1) + np.random.randn(*p.shape)*0.1
+    # set uniform I & cr
+    p[...,1,:] += 2.0
+    p[...,5,:] /= num_node
+
+    def adhoc(x):
+        x[0] = x[0]*(x[0] > 0)
+        return x
+    
+    def run1():
+        trace_np = run_sim_np(
+            mpr_dfun, num_svar, buf_init_np, s_w, idelays,
+            MPRTheta(*p.transpose(2,1,0,3).reshape(num_parm,num_node,num_batch*8)),
+            # mpr_default_theta,
+            horizon, num_item=num_batch*8, num_node=num_node, num_time=num_time,
+            dt=dt, num_skip=num_skip, adhoc=adhoc
+        )
+    
+    benchmark(run1)
+
+
+@pytest.mark.benchmark(group='sim_mpr')
+def test_perf_step_mpr_cpp(benchmark):
+    cv = 1.0
+    dt = 0.01
+    num_node = 90
+    num_time = int(10. / dt)
+    num_skip = num_time//2
+    horizon = 256
+    num_batch = 4
+    sparsity = 0.3 # nnz=0.5*num_node**2
+
+    weights, lengths, spw_j = rand_weights(
+        seed=42,
+        sparsity=sparsity, num_node=num_node, horizon=horizon,
+        dt=dt, cv=cv)
+    s_w = scipy.sparse.csr_matrix(weights)
+    idelays = (lengths[weights != 0]/cv/dt).astype(np.uint32)+2
+    # idelays = idelays//25 + 2
+    assert idelays.max() < horizon
+    assert idelays.min() >= 2
+    cx = m.Cx8s(num_node, horizon, num_batch)
+    conn = m.Conn(num_node, s_w.data.size)  #, mode=mode)
+    conn.weights[:] = s_w.data.astype(np.float32)
+    conn.indptr[:] = s_w.indptr.astype(np.uint32)
+    conn.indices[:] = s_w.indices.astype(np.uint32)
+    conn.idelays[:] = idelays
+    print('nnz is', s_w.data.size)
+
+    assert cx.buf.shape == (num_batch, num_node, horizon, 8)
+    # then we can test
+    buf_val = np.r_[:1.0:1j*num_batch*num_node *
+                      horizon * 8].reshape(num_batch, num_node, horizon, 8).astype('f')*4.0
+    cx.buf[:] = buf_val
+    print('buf requires', cx.buf.nbytes>>20, 'MB')
+    np.testing.assert_equal(buf_val, cx.buf)
+    cx.cx1[:] = cx.cx2[:] = 0.0
+
+    # cx, c, x, p, t0, nt, dt
+    num_svar, num_parm = 2, 6
+    x = np.zeros((num_batch, num_svar, num_node, 8), 'f')
+    # p_varies_node adds ~5% time
+    p = np.zeros((num_batch, 1, num_parm, 8), 'f')
+    p[:] = p + np.array(mpr_default_theta
+                        ).reshape(1,1,-1,1) + np.random.randn(*p.shape)*0.1
+    # set uniform I & cr
+    p[...,1,:] += 2.0
+    p[...,5,:] /= num_node
+
+    def run1():
+        # trace_c = np.zeros((num_time//num_skip, num_batch, num_svar, num_node, 8)
+        for t0 in range(num_time // num_skip):
+            m.step_mpr(cx, conn, x, p, t0*num_skip, num_skip, dt)
+    
+    benchmark(run1)
