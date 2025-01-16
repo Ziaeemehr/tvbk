@@ -4,6 +4,21 @@
 #include <vector>
 #include <thread>
 
+/*
+                                             gg            
+                                             ""            
+  ,ggg,,ggg,,ggg,     ,gggg,gg    ,gggg,gg   gg     ,gggg, 
+ ,8" "8P" "8P" "8,   dP"  "Y8I   dP"  "Y8I   88    dP"  "Yb
+ I8   8I   8I   8I  i8'    ,8I  i8'    ,8I   88   i8'      
+,dP   8I   8I   Yb,,d8,   ,d8b,,d8,   ,d8I _,88,_,d8,_    _
+8P'   8I   8I   `Y8P"Y8888P"`Y8P"Y8888P"8888P""Y8P""Y8888PP
+                                      ,d8I'                
+                                    ,dP'8I                 
+                                   ,8"  8I                 
+                                   I8   8I                 
+                                   `8, ,8I                 
+                                    `Y8P"  
+*/
 // at -O3 -fopen-simd, these kernels result in compact asm
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -35,6 +50,18 @@ template <int width> INLINE static void name (args) \
 #define M_PI_F ((float) M_PI)
 
 namespace tvbk {
+
+  /*
+         8I               I8              
+         8I               I8              
+         8I            88888888           
+         8I               I8              
+   ,gggg,8I    ,gggg,gg   I8     ,gggg,gg 
+  dP"  "Y8I   dP"  "Y8I   I8    dP"  "Y8I 
+ i8'    ,8I  i8'    ,8I  ,I8,  i8'    ,8I 
+,d8,   ,d8b,,d8,   ,d8b,,d88b,,d8,   ,d8b,
+P"Y8888P"`Y8P"Y8888P"`Y88P""Y8P"Y8888P"`Y8 
+  */
 
 template <int width>
 struct cxb {
@@ -86,51 +113,18 @@ struct conn {
   }
 };
 
-INLINE void cx_all_j(const cx &cx, const conn &c, uint32_t t, uint32_t j) {
-  uint32_t wrap_mask = cx.num_time - 1; // assume num_time is power of 2
-  float *const buf = cx.buf + j * cx.num_time;
-  uint32_t th = t + cx.num_time;
-#pragma omp simd
-  for (uint32_t l = c.indptr[j]; l < c.indptr[j + 1]; l++) {
-    uint32_t i = c.indices[l];
-    float w = c.weights[l];
-    uint32_t d = c.idelays[l];
-    uint32_t p1 = (th - d) & wrap_mask;
-    uint32_t p2 = (th - d + 1) & wrap_mask;
-    cx.cx1[i] += w * buf[p1];
-    cx.cx2[i] += w * buf[p2];
-  }
-}
+/*
+                                              8I                                
+                                              8I                                
+                                              8I                                
+                                              8I                                
+  ,gggggg,    ,gggg,gg   ,ggg,,ggg,     ,gggg,8I    ,ggggg,    ,ggg,,ggg,,ggg,  
+  dP""""8I   dP"  "Y8I  ,8" "8P" "8,   dP"  "Y8I   dP"  "Y8ggg,8" "8P" "8P" "8, 
+ ,8'    8I  i8'    ,8I  I8   8I   8I  i8'    ,8I  i8'    ,8I  I8   8I   8I   8I 
+,dP     Y8,,d8,   ,d8b,,dP   8I   Yb,,d8,   ,d8b,,d8,   ,d8' ,dP   8I   8I   Yb,
+8P      `Y8P"Y8888P"`Y88P'   8I   `Y8P"Y8888P"`Y8P"Y8888P"   8P'   8I   8I   `Y8
+*/
 
-INLINE void cx_j(const cx &cx, const conn &c, uint32_t t) {
-#pragma omp simd
-  for (int i = 0; i < c.num_node; i++)
-    cx.cx1[i] = cx.cx2[i] = 0.0f;
-  for (int j = 0; j < c.num_node; j++)
-    cx_all_j(cx, c, t, j);
-}
-
-INLINE void cx_i(const cx &cx, const conn &c, uint32_t t) {
-  uint32_t wrap_mask = cx.num_time - 1; // assume num_time is power of 2
-  uint32_t th = t + cx.num_time;
-#pragma omp simd
-  for (int i = 0; i < c.num_node; i++) {
-    float cx1 = 0.f, cx2 = 0.f;
-    for (uint32_t l = c.indptr[i]; l < c.indptr[i + 1]; l++) {
-      uint32_t j = c.indices[l];
-      float w = c.weights[l];
-      uint32_t d = c.idelays[l];
-      uint32_t p1 = (th - d) & wrap_mask;
-      uint32_t p2 = (th - d + 1) & wrap_mask;
-      cx1 += w * cx.buf[j * cx.num_time + p1];
-      cx2 += w * cx.buf[j * cx.num_time + p2];
-    }
-    cx.cx1[i] = cx1;
-    cx.cx2[i] = cx2;
-  }
-}
-
-// rng
 INLINE uint64_t sfc64(uint64_t s[4]) {
   uint64_t r = s[0] + s[1] + s[3]++;
   s[0] = (s[1] >> 11) ^ s[1];
@@ -165,6 +159,18 @@ INLINE void krandn(uint64_t **seed, float *out) {
   for (int i = 0; i < width; i++)
     out[i] = randn1(seed[i]);
 }
+/*
+ ,dPYb,                                                ,dPYb,          
+ IP'`Yb                                                IP'`Yb          
+ I8  8I                                                I8  8I          
+ I8  8bgg,                                             I8  8'          
+ I8 dP" "8   ,ggg,    ,gggggg,   ,ggg,,ggg,    ,ggg,   I8 dP    ,g,    
+ I8d8bggP"  i8" "8i   dP""""8I  ,8" "8P" "8,  i8" "8i  I8dP    ,8'8,   
+ I8P' "Yb,  I8, ,8I  ,8'    8I  I8   8I   8I  I8, ,8I  I8P    ,8'  Yb  
+,d8    `Yb, `YbadP' ,dP     Y8,,dP   8I   Yb, `YbadP' ,d8b,_ ,8'_   8) 
+88P      Y8888P"Y8888P      `Y88P'   8I   `Y8888P"Y8888P'"Y88P' "YY8P8P 
+*/
+
 
 /* simple stuff */
 kernel(inc,      x[i]                    += w*y[i], float *x, float *y, float w)
@@ -207,6 +213,61 @@ INLINE static void dot(float *dst, float *x, float *y)
     #pragma omp simd reduction(+:acc)
     for (int i=0; i<width; i++) acc+=x[i]*y[i];
     *dst = acc;
+}
+
+/*
+                         I8                                        ,dPYb,    
+                         I8                                        IP'`Yb    
+                      88888888                                     I8  8I    
+                         I8                                        I8  8bgg, 
+  ,ggg,,ggg,    ,ggg,    I8   gg    gg    gg   ,ggggg,   ,gggggg,  I8 dP" "8 
+ ,8" "8P" "8,  i8" "8i   I8   I8    I8    88bgdP"  "Y8gggdP""""8I  I8d8bggP" 
+ I8   8I   8I  I8, ,8I  ,I8,  I8    I8    8I i8'    ,8I ,8'    8I  I8P' "Yb, 
+,dP   8I   Yb, `YbadP' ,d88b,,d8,  ,d8,  ,8I,d8,   ,d8',dP     Y8,,d8    `Yb,
+8P'   8I   `Y8888P"Y8888P""Y8P""Y88P""Y88P" P"Y8888P"  8P      `Y888P      Y8       
+*/
+INLINE void cx_all_j(const cx &cx, const conn &c, uint32_t t, uint32_t j) {
+  uint32_t wrap_mask = cx.num_time - 1; // assume num_time is power of 2
+  float *const buf = cx.buf + j * cx.num_time;
+  uint32_t th = t + cx.num_time;
+#pragma omp simd
+  for (uint32_t l = c.indptr[j]; l < c.indptr[j + 1]; l++) {
+    uint32_t i = c.indices[l];
+    float w = c.weights[l];
+    uint32_t d = c.idelays[l];
+    uint32_t p1 = (th - d) & wrap_mask;
+    uint32_t p2 = (th - d + 1) & wrap_mask;
+    cx.cx1[i] += w * buf[p1];
+    cx.cx2[i] += w * buf[p2];
+  }
+}
+
+INLINE void cx_j(const cx &cx, const conn &c, uint32_t t) {
+#pragma omp simd
+  for (int i = 0; i < c.num_node; i++)
+    cx.cx1[i] = cx.cx2[i] = 0.0f;
+  for (int j = 0; j < c.num_node; j++)
+    cx_all_j(cx, c, t, j);
+}
+
+INLINE void cx_i(const cx &cx, const conn &c, uint32_t t) {
+  uint32_t wrap_mask = cx.num_time - 1; // assume num_time is power of 2
+  uint32_t th = t + cx.num_time;
+#pragma omp simd
+  for (int i = 0; i < c.num_node; i++) {
+    float cx1 = 0.f, cx2 = 0.f;
+    for (uint32_t l = c.indptr[i]; l < c.indptr[i + 1]; l++) {
+      uint32_t j = c.indices[l];
+      float w = c.weights[l];
+      uint32_t d = c.idelays[l];
+      uint32_t p1 = (th - d) & wrap_mask;
+      uint32_t p2 = (th - d + 1) & wrap_mask;
+      cx1 += w * cx.buf[j * cx.num_time + p1];
+      cx2 += w * cx.buf[j * cx.num_time + p2];
+    }
+    cx.cx1[i] = cx1;
+    cx.cx2[i] = cx2;
+  }
 }
 
 // setup pointers b1 & b2 to delay_buffer to read from
@@ -314,7 +375,17 @@ static void INLINE cx_j_bs(
   for (uint32_t i = 0; i < cx.num_batch; i++)
     cx_j_b<width>(cx.batch(i), c, t);
 }
-
+/*
+                                       8I           ,dPYb,          
+                                       8I           IP'`Yb          
+                                       8I           I8  8I          
+                                       8I           I8  8'          
+  ,ggg,,ggg,,ggg,     ,ggggg,    ,gggg,8I   ,ggg,   I8 dP    ,g,    
+ ,8" "8P" "8P" "8,   dP"  "Y8gggdP"  "Y8I  i8" "8i  I8dP    ,8'8,   
+ I8   8I   8I   8I  i8'    ,8I i8'    ,8I  I8, ,8I  I8P    ,8'  Yb  
+,dP   8I   8I   Yb,,d8,   ,d8',d8,   ,d8b, `YbadP' ,d8b,_ ,8'_   8) 
+8P'   8I   8I   `Y8P"Y8888P"  P"Y8888P"`Y8888P"Y8888P'"Y88P' "YY8P8P
+*/
 struct jr {
   static const uint32_t num_svar=6, num_parm=14, num_cvar=1;
   static constexpr const char *const parms = "A,B,a,b,v0,nu_max,r,J,a_1,a_2,a_3,a_4,mu,I", *const name="jr";
@@ -369,7 +440,23 @@ struct mpr {
     }
   }
 };
-
+/*
+                      I8                                                I8           
+                      I8                                                I8           
+  gg               88888888                                          88888888        
+  ""                  I8                                                I8           
+  gg    ,ggg,,ggg,    I8    ,ggg,     ,gggg,gg   ,gggggg,    ,gggg,gg   I8    ,ggg,  
+  88   ,8" "8P" "8,   I8   i8" "8i   dP"  "Y8I   dP""""8I   dP"  "Y8I   I8   i8" "8i 
+  88   I8   8I   8I  ,I8,  I8, ,8I  i8'    ,8I  ,8'    8I  i8'    ,8I  ,I8,  I8, ,8I 
+_,88,_,dP   8I   Yb,,d88b, `YbadP' ,d8,   ,d8I ,dP     Y8,,d8,   ,d8b,,d88b, `YbadP' 
+8P""Y88P'   8I   `Y88P""Y8888P"Y888P"Y8888P"8888P      `Y8P"Y8888P"`Y88P""Y8888P"Y888
+                                          ,d8I'                                      
+                                        ,dP'8I                                       
+                                       ,8"  8I                                       
+                                       I8   8I                                       
+                                       `8, ,8I                                       
+                                        `Y8P"
+*/
 // steps a model for single batch of nodes size width assuming
 // precomputed cx1 & cx2, and updates buffer in cx
 template <typename model, int width=8>

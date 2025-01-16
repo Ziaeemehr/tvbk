@@ -101,6 +101,7 @@ jobs:
       run: |
         mkdir -p dist
         cp -v *.whl dist/
+        rm -v dist/*pyodide*.whl
         find . -name '*.whl'
 
     - uses: pypa/gh-action-pypi-publish@release/v1
