@@ -444,8 +444,8 @@ static void step_batches(
   const bool p_varies_node,
   const uint32_t t0, const uint32_t nt, const float dt)
 {
-// check if openmp is available?
-#if _OPENMP
+// use omp if available or emscripten since std::thread causes emscripten to fail
+#if _OPENMP || __EMSCRIPTEN__
   #pragma omp parallel for
 #else
   std::vector<std::thread> threads;
@@ -459,7 +459,7 @@ static void step_batches(
     // otherwise p varies only per batch & item, (num_batch, num_parm, width)
     else
       pb = p + b * model::num_parm * width;
-#if _OPENMP
+#if _OPENMP || __EMSCRIPTEN__
     step_batch<model, width>(cx.batch(b), c, xb, pb, p_varies_node, t0, nt, dt);
 #else
     threads.emplace_back(
@@ -467,7 +467,7 @@ static void step_batches(
 #endif
   }
 
-#if _OPENMP
+#if _OPENMP || __EMSCRIPTEN__
 #else
   for (auto &th : threads) th.join();
 #endif
