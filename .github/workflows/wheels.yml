@@ -91,11 +91,14 @@ jobs:
 
     steps:
     - uses: actions/setup-python@v5
-    
+
     - uses: actions/download-artifact@v4
       with:
         pattern: dist-*
         merge-multiple: true
+
+    - name: debug wheel location
+      run: find . -name '*.whl'
 
     - uses: pypa/gh-action-pypi-publish@release/v1
       with:
