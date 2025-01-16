@@ -1,6 +1,8 @@
 #pragma once
 #include <stdint.h>
 #include <math.h>
+#include <vector>
+#include <thread>
 
 // at -O3 -fopen-simd, these kernels result in compact asm
 #ifdef _MSC_VER
@@ -361,6 +363,7 @@ struct mpr {
   }
 };
 
+// check perf impact of having fewer parameters
 struct mpr2 {
   static const uint32_t num_svar=2, num_parm=2, num_cvar=1;
   static constexpr const char * const parms = "I cr", * const name = "mpr2";
@@ -400,17 +403,6 @@ static void heun_step(
   constexpr uint8_t nsvar = model::num_svar;
   const uint32_t num_node = cx.num_node, horizon = cx.num_time;
   float x[nsvar*width], xi[nsvar*width]={}, dx1[nsvar*width]={}, dx2[nsvar*width]={};
-
-  if (i_node==5) {
-    // printf("I_c: ");
-    // for (int i=0; i<width; i++) printf("%0.3f ", cx1[i]);
-    // // for (int i=0; i<width; i++) printf("%0.3f ", params[i+5*width]);
-    // printf("\n");
-    // printf("I_c: ");
-    // for (int i=0; i<width; i++) printf("%0.3f ", cx2[i]);
-    // // for (int i=0; i<width; i++) printf("%0.3f ", params[i+5*width]);
-    // printf("\n\n");
-  }
 
   // load states
   for (int svar=0; svar < nsvar; svar++) {
@@ -469,7 +461,12 @@ static void step_batches(
   const bool p_varies_node,
   const uint32_t t0, const uint32_t nt, const float dt)
 {
+// check if openmp is available?
+#if _OPENMP
   #pragma omp parallel for
+#else
+  std::vector<std::thread> threads;
+#endif
   for (int b=0; b<cx.num_batch; b++) {
     const float *pb;
     float *xb=x + b * model::num_svar * cx.num_node * width;
@@ -479,8 +476,18 @@ static void step_batches(
     // otherwise p varies only per batch & item, (num_batch, num_parm, width)
     else
       pb = p + b * model::num_parm * width;
+#if _OPENMP
     step_batch<model, width>(cx.batch(b), c, xb, pb, p_varies_node, t0, nt, dt);
+#else
+    threads.emplace_back(
+      step_batch<model, width>, cx.batch(b), c, xb, pb, p_varies_node, t0, nt, dt);
+#endif
   }
+
+#if _OPENMP
+#else
+  for (auto &th : threads) th.join();
+#endif
 }
 
 } // namespace tvbk

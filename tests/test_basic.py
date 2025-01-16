@@ -551,7 +551,7 @@ def test_perf_step_mpr_cpp(benchmark):
     num_skip = 1000
     num_time = 10000
     horizon = 256
-    num_batch = 64
+    num_batch = 8
     sparsity = 0.3 # nnz=0.5*num_node**2
 
     weights, lengths, spw_j = rand_weights(
