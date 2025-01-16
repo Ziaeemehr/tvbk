@@ -484,8 +484,8 @@ def test_perf_step_mpr_np(benchmark):
     cv = 1.0
     dt = 0.01
     num_node = 90
-    num_skip = 20
-    num_time = 1000
+    num_time = int(10. / dt)
+    num_skip = num_time//2
     horizon = 256
     num_batch = 4
     sparsity = 0.5 # nnz=0.5*num_node**2
@@ -548,17 +548,16 @@ def test_perf_step_mpr_cpp(benchmark):
     cv = 1.0
     dt = 0.01
     num_node = 90
-    num_skip = 1000
-    num_time = 10000
+    num_time = int(10. / dt)
+    num_skip = num_time//2
     horizon = 256
-    num_batch = 8
+    num_batch = 4
     sparsity = 0.3 # nnz=0.5*num_node**2
 
     weights, lengths, spw_j = rand_weights(
-        seed=46,
+        seed=42,
         sparsity=sparsity, num_node=num_node, horizon=horizon,
         dt=dt, cv=cv)
-    weights = np.ones_like(weights)
     s_w = scipy.sparse.csr_matrix(weights)
     idelays = (lengths[weights != 0]/cv/dt).astype(np.uint32)+2
     # idelays = idelays//25 + 2
@@ -570,6 +569,7 @@ def test_perf_step_mpr_cpp(benchmark):
     conn.indptr[:] = s_w.indptr.astype(np.uint32)
     conn.indices[:] = s_w.indices.astype(np.uint32)
     conn.idelays[:] = idelays
+    print('nnz is', s_w.data.size)
 
     assert cx.buf.shape == (num_batch, num_node, horizon, 8)
     # then we can test
@@ -580,13 +580,11 @@ def test_perf_step_mpr_cpp(benchmark):
     np.testing.assert_equal(buf_val, cx.buf)
     cx.cx1[:] = cx.cx2[:] = 0.0
 
-    buf_init_np = buf_val.transpose(1,2,0,3).reshape(num_node, horizon, num_batch*8)
-
     # cx, c, x, p, t0, nt, dt
     num_svar, num_parm = 2, 6
     x = np.zeros((num_batch, num_svar, num_node, 8), 'f')
     # p_varies_node adds ~5% time
-    p = np.zeros((num_batch, num_node, num_parm, 8), 'f')
+    p = np.zeros((num_batch, 1, num_parm, 8), 'f')
     p[:] = p + np.array(mpr_default_theta
                         ).reshape(1,1,-1,1) + np.random.randn(*p.shape)*0.1
     # set uniform I & cr
@@ -599,62 +597,3 @@ def test_perf_step_mpr_cpp(benchmark):
             m.step_mpr(cx, conn, x, p, t0*num_skip, num_skip, dt)
     
     benchmark(run1)
-
-
-@pytest.mark.benchmark(group='sim_mpr')
-def test_perf_step_mpr2_cpp(benchmark):
-    cv = 1.0
-    dt = 0.01
-    num_node = 90
-    num_skip = 1000
-    num_time = 10000
-    horizon = 256
-    num_batch = 64
-    sparsity = 0.3 # nnz=0.5*num_node**2
-
-    weights, lengths, spw_j = rand_weights(
-        seed=46,
-        sparsity=sparsity, num_node=num_node, horizon=horizon,
-        dt=dt, cv=cv)
-    weights = np.ones_like(weights)
-    s_w = scipy.sparse.csr_matrix(weights)
-    idelays = (lengths[weights != 0]/cv/dt).astype(np.uint32)+2
-    # idelays = idelays//25 + 2
-    assert idelays.max() < horizon
-    assert idelays.min() >= 2
-    cx = m.Cx8s(num_node, horizon, num_batch)
-    conn = m.Conn(num_node, s_w.data.size)  #, mode=mode)
-    conn.weights[:] = s_w.data.astype(np.float32)
-    conn.indptr[:] = s_w.indptr.astype(np.uint32)
-    conn.indices[:] = s_w.indices.astype(np.uint32)
-    conn.idelays[:] = idelays
-
-    assert cx.buf.shape == (num_batch, num_node, horizon, 8)
-    # then we can test
-    buf_val = np.r_[:1.0:1j*num_batch*num_node *
-                      horizon * 8].reshape(num_batch, num_node, horizon, 8).astype('f')*4.0
-    cx.buf[:] = buf_val
-    print('buf requires', cx.buf.nbytes>>20, 'MB')
-    np.testing.assert_equal(buf_val, cx.buf)
-    cx.cx1[:] = cx.cx2[:] = 0.0
-
-    buf_init_np = buf_val.transpose(1,2,0,3).reshape(num_node, horizon, num_batch*8)
-
-    # cx, c, x, p, t0, nt, dt
-    num_svar, num_parm = 2, 2
-    x = np.zeros((num_batch, num_svar, num_node, 8), 'f')
-    # p_varies_node adds ~5% time
-    p = np.zeros((num_batch, num_node, num_parm, 8), 'f')
-    p[:] = p + np.array([0.0, 1.0]
-                        ).reshape(1,1,-1,1) + np.random.randn(*p.shape)*0.1
-    # set uniform I & cr
-    p[...,0,:] += 2.0
-    p[...,1,:] /= num_node
-
-    def run1():
-        # trace_c = np.zeros((num_time//num_skip, num_batch, num_svar, num_node, 8)
-        for t0 in range(num_time // num_skip):
-            m.step_mpr2(cx, conn, x, p, t0*num_skip, num_skip, dt)
-    
-    benchmark(run1)
-

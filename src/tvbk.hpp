@@ -21,7 +21,7 @@ template <int width> INLINE static void name (__VA_ARGS__) \
 #define kernel(name, expr, args...) \
 template <int width> INLINE static void name (args) \
 { \
-  _Pragma("omp simd") \
+  _Pragma("clang loop unroll(full)") \
   for (int i=0; i < width; i++) \
     expr;\
 }
@@ -231,7 +231,7 @@ template <int width=8>
   const uint32_t *indices = c.indices + nz;
   const uint32_t *idelays = c.idelays + nz;
   float *buf = cx.buf;
-#pragma omp simd
+#pragma clang loop vectorize_width(4)
   for (uint32_t i = 0; i < 4; i++) {
     w[i] = weights[i];
     uint32_t t0 = H + i_time - idelays[i];
@@ -363,40 +363,12 @@ struct mpr {
   }
 };
 
-// check perf impact of having fewer parameters
-struct mpr2 {
-  static const uint32_t num_svar=2, num_parm=2, num_cvar=1;
-  static constexpr const char * const parms = "I cr", * const name = "mpr2";
-  static constexpr const float default_parms[6] = {0.0, 1.0};
-  template <int width>
-  INLINE static void
-  dfun(float *__restrict dx, const float *__restrict x, const float *__restrict c, const float *__restrict p)
-  {
-    #pragma omp simd
-    for (int i=0; i<width; i++) {
-      float r=x[i+0*width],V=x[i+1*width];
-      // 1.0, 0.0, 1.0, 15.0, -5.0, 1.0
-      float I=p[i],cr=p[i+width];
-      r = r * (r > 0);
-      const float tau=1.0f, Delta=1.0f, J=15.0f, eta=-5.0f;
-      // tau is 1, so drop the reciprocal
-      dx[i+0*width] = (Delta / (M_PI * tau) + 2.0f * r * V);
-      dx[i+1*width] = (V * V + eta + J * tau * r + I + cr * c[i] - (M_PI * M_PI) * (r * r) * (tau * tau));
-    }
-  }
-  template <int width> INLINE static void adhoc(float *x) {
-    #pragma omp simd
-    for (int i=0; i<width; i++) {
-      x[i] = x[i] * (x[i] > 0);
-    }
-  }
-};
-
 // steps a model for single batch of nodes size width assuming
 // precomputed cx1 & cx2, and updates buffer in cx
 template <typename model, int width=8>
 static void heun_step(
-  const cxb<width> &cx, float *states, const float* cx1, const float* cx2, const float *params,
+  const cxb<width> &cx, float * __restrict states, 
+  const float*  __restrict cx1, const float*  __restrict cx2, const float * __restrict params,
   const uint32_t i_node, const uint32_t i_time, const float dt
 )
 {
@@ -405,6 +377,7 @@ static void heun_step(
   float x[nsvar*width], xi[nsvar*width]={}, dx1[nsvar*width]={}, dx2[nsvar*width]={};
 
   // load states
+#pragma clang loop unroll(full)
   for (int svar=0; svar < nsvar; svar++) {
     load<width>(x+svar*width, states+width*(i_node + num_node*svar));
     zero<width>(xi+svar*width);
@@ -414,15 +387,18 @@ static void heun_step(
 
   // Heun stage 1
   model::template dfun<width>(dx1, x, cx1, params);
+#pragma clang loop unroll(full)
   for (int svar=0; svar < nsvar; svar++)
       heunpred<width>(x+svar*width, xi+svar*width, dx1+svar*width, dt);
   model::template adhoc<width>(xi);
 
   // Heun stage 2
   model::template dfun<width>(dx2, xi, cx2, params);
+#pragma clang loop unroll(full)
   for (int svar=0; svar < nsvar; svar++)
       heuncorr<width>(x+svar*width, dx1+svar*width, dx2+svar*width, dt);
   model::template adhoc<width>(x);
+#pragma clang loop unroll(full)
   for (int svar=0; svar < nsvar; svar++)
       load<width>(states+width*(i_node + num_node*svar), x+svar*width);
 

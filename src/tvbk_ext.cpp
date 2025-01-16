@@ -160,5 +160,4 @@ NB_MODULE(tvbk_ext, m) {
 
   decl_step<tvbk::jr>(m);
   decl_step<tvbk::mpr>(m);
-  decl_step<tvbk::mpr2>(m);
 }
