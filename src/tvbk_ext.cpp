@@ -1,6 +1,10 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include "tvbk.hpp"
 
 namespace nb = nanobind;
@@ -25,16 +29,33 @@ template <typename model, typename M, int width=8> void decl_step(M m)
     farr<nb::shape<-1,-1,model::num_parm,width>> &p,
     uint32_t t0, uint32_t nt, float dt)
     {
+      std::string err_msg = "no error";
       // check x.shape[0] == p.shape[0] == cx.num_batch
       if (!(x.shape(0) == p.shape(0) && x.shape(0) == cx.num_batch))
-        throw std::runtime_error("batch shapes don't match: check that x.shape[0] == p.shape[0] == cx.num_batch");
+      {
+        err_msg = "batch shapes don't match: check that x.shape[0] == p.shape[0] == cx.num_batch";
+        goto throw_error;
+      }
       // check x.shape[2] == cx.num_node == p.shape[1]
       if (!(x.shape(2) == cx.num_node && x.shape(2)))
-        throw std::runtime_error("node shapes don't match: check that x.shape[2] == cx.num_node");
+      {
+        err_msg = "node shapes don't match: check that x.shape[2] == cx.num_node";
+        goto throw_error;
+      }
       if (!(p.shape(1) == cx.num_node || p.shape(1) == 1))
-        throw std::runtime_error("p.shape[1] must be num_node or 1.");
+      {
+        err_msg = "p.shape[1] must be num_node or 1.";
+        goto throw_error;
+      }
       tvbk::step_batches<model,8>(cx, c, (float *)x.data(), (float *)p.data(),
         p.shape(1) == cx.num_node, t0, nt, dt);
+      return;
+    throw_error:
+#ifdef __EMSCRIPTEN__
+      emscripten_run_script(err_msg);
+#else
+      throw std::runtime_error(err_msg);
+#endif
     }, "cx"_a, "c"_a, "x"_a, "p"_a, "t0"_a, "nt"_a, "dt"_a);
 }
 

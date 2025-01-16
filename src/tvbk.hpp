@@ -27,6 +27,13 @@ template <int width> INLINE static void name (args) \
 }
 #endif
 
+// MSVC and others may not define M_PI?
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+#define M_PI_F ((float) M_PI)
+
 namespace tvbk {
 
 template <int width>
@@ -351,8 +358,8 @@ struct mpr {
       float r=x[i+0*width],V=x[i+1*width];
       float tau=p[i+0*width],I=p[i+1*width],Delta=p[i+2*width],J=p[i+3*width],eta=p[i+4*width],cr=p[i+5*width];
       r = r * (r > 0);
-      dx[i+0*width] = (1 / tau) * (Delta / (M_PI * tau) + 2.0f * r * V);
-      dx[i+1*width] = (1 / tau) * (V * V + eta + J * tau * r + I + cr * c[i] - (M_PI * M_PI) * (r * r) * (tau * tau));
+      dx[i+0*width] = (1 / tau) * (Delta / (M_PI_F * tau) + 2.0f * r * V);
+      dx[i+1*width] = (1 / tau) * (V * V + eta + J * tau * r + I + cr * c[i] - (M_PI_F * M_PI_F) * (r * r) * (tau * tau));
     }
   }
   template <int width> INLINE static void adhoc(float *x) {
