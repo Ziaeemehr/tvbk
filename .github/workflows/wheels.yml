@@ -97,13 +97,10 @@ jobs:
         pattern: dist-*
         merge-multiple: true
 
-    # - uses: pypa/gh-action-pypi-publish@release/v1
-    #   with:
-    #     user: __token__
-    #     password: ${{ secrets.pypi_password }}
-
-    - name: list wheels
-      run: ls -l dist wheelhouse
+    - uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        user: __token__
+        password: ${{ secrets.PYPI_PASSWORD }}
 
     - name: Upload wheels
       uses: actions/upload-artifact@v4
