@@ -52,7 +52,9 @@ template <typename model, typename M, int width=8> void decl_step(M m)
       return;
     throw_error:
 #ifdef __EMSCRIPTEN__
-      emscripten_run_script(err_msg);
+      char log_cmd[256];
+      snprintf(log_cmd, 256, "console.error('%s')", err_msg.c_str());
+      emscripten_run_script(log_cmd);
 #else
       throw std::runtime_error(err_msg);
 #endif
