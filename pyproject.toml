@@ -4,8 +4,8 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "tvbk"
-version = "0.0.1"
-description = "kernels for tvb built w/ nanobind"
+version = "0.0.2"
+description = "do virtual brains eat computational popcorn?"
 readme = "README.md"
 requires-python = ">=3.8"
 authors = [
