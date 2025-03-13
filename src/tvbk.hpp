@@ -177,6 +177,7 @@ kernel(inc,      x[i]                    += w*y[i], float *x, float *y, float w)
 kernel(adds,     x[i]                         += a, float *x, float a)
 kernel(load,     x[i]                       = y[i], float *x, float *y)
 kernel(zero,     x[i]                        = 0.f, float *x)
+kernel(muls,     x[i]                       *=   w, float *x, float w)
 
 /* Heun stages */
 kernel(heunpred, xi[i]           = x[i] + dt*dx[i], float *x, float *xi, float *dx, float dt)
@@ -506,12 +507,15 @@ template <typename model, int width=8>
 static void step_batch(
   const cxb<width> &cx, const conn &c,
   float *x, // (num_svar, num_node, width)
+  float *y, // (num_svar, num_node, width)
   // TODO try x layout as (num_node, num_svar, width)
   const float *p, // (num_node, num_parm, width)
   const bool p_varies_node,
   const uint32_t t0, const uint32_t nt, const float dt)
 {
   float cx1[width], cx2[width];
+  for (uint32_t i=0; i<(model::num_svar * cx.num_node); i++)
+    zero<width>(y+i*width);
   for (uint32_t t=t0; t<(t0+nt); t++) {
     for (uint32_t i = 0; i < cx.num_node; i++) {
       apply_all_node<width>(cx, c, t, i, cx1, cx2);
@@ -519,13 +523,18 @@ static void step_batch(
         p_varies_node ? p+i*model::num_parm*width : p,
         i, t, dt);
     }
+    for (uint32_t i=0; i<(model::num_svar * cx.num_node); i++)
+      inc<width>(y+i*width, x+i*width, 1.0f);
   }
+  for (uint32_t i=0; i<(model::num_svar * cx.num_node); i++)
+    muls<width>(y+i*width, 1./nt);
 }
 
 template <typename model, int width=8>
 static void step_batches(
   const cxbs<width> &cx, const conn &c,
   float *x, // (num_batch, num_svar, num_node, width)
+  float *y, // (num_batch, num_svar, num_node, width)
   // TODO try x layout as (num_node, num_svar, width)
   const float *p, 
   const bool p_varies_node,
@@ -540,6 +549,7 @@ static void step_batches(
   for (int b=0; b<cx.num_batch; b++) {
     const float *pb;
     float *xb=x + b * model::num_svar * cx.num_node * width;
+    float *yb=y + b * model::num_svar * cx.num_node * width;
     // when p varies per node, shape is // (num_batch, num_node, num_parm, width)
     if (p_varies_node)
       pb = p + b * cx.num_node * model::num_parm * width;
@@ -547,10 +557,10 @@ static void step_batches(
     else
       pb = p + b * model::num_parm * width;
 #if _OPENMP || __EMSCRIPTEN__
-    step_batch<model, width>(cx.batch(b), c, xb, pb, p_varies_node, t0, nt, dt);
+    step_batch<model, width>(cx.batch(b), c, xb, yb, pb, p_varies_node, t0, nt, dt);
 #else
     threads.emplace_back(
-      step_batch<model, width>, cx.batch(b), c, xb, pb, p_varies_node, t0, nt, dt);
+      step_batch<model, width>, cx.batch(b), c, xb, yb, pb, p_varies_node, t0, nt, dt);
 #endif
   }
 

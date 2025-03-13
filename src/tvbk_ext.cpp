@@ -26,6 +26,7 @@ template <typename model, typename M, int width=8> void decl_step(M m)
   m.def(name,
     [](const tvbk::cxbs<width> &cx, const tvbk::conn &c,
     farr<nb::shape<-1,model::num_svar,-1,width>> &x,
+    farr<nb::shape<-1,model::num_svar,-1,width>> &y,
     farr<nb::shape<-1,-1,model::num_parm,width>> &p,
     uint32_t t0, uint32_t nt, float dt)
     {
@@ -34,6 +35,12 @@ template <typename model, typename M, int width=8> void decl_step(M m)
       if (!(x.shape(0) == p.shape(0) && x.shape(0) == cx.num_batch))
       {
         err_msg = "batch shapes don't match: check that x.shape[0] == p.shape[0] == cx.num_batch";
+        goto throw_error;
+      }
+      // check x.shape == y.shape
+      if (!( x.shape(0) == y.shape(0) && x.shape(2) == y.shape(2) ))
+      {
+        err_msg = "x and y shapes do not match!";
         goto throw_error;
       }
       // check x.shape[2] == cx.num_node == p.shape[1]
@@ -47,7 +54,7 @@ template <typename model, typename M, int width=8> void decl_step(M m)
         err_msg = "p.shape[1] must be num_node or 1.";
         goto throw_error;
       }
-      tvbk::step_batches<model,8>(cx, c, (float *)x.data(), (float *)p.data(),
+      tvbk::step_batches<model,8>(cx, c, (float *)x.data(), (float *)y.data(), (float *)p.data(),
         p.shape(1) == cx.num_node, t0, nt, dt);
       return;
     throw_error:
@@ -58,7 +65,7 @@ template <typename model, typename M, int width=8> void decl_step(M m)
 #else
       throw std::runtime_error(err_msg);
 #endif
-    }, "cx"_a, "c"_a, "x"_a, "p"_a, "t0"_a, "nt"_a, "dt"_a);
+    }, "cx"_a, "c"_a, "x"_a, "y"_a, "p"_a, "t0"_a, "nt"_a, "dt"_a);
 }
 
 NB_MODULE(tvbk_ext, m) {

@@ -281,7 +281,6 @@ def test_jr8():
 MPRTheta = collections.namedtuple(
     typename='MPRTheta',
     field_names='tau I Delta J eta cr'.split(' '))
-
 mpr_default_theta = MPRTheta(
     tau=1.0,
     I=0.0,
@@ -432,9 +431,10 @@ def test_step_mpr():
     )
     trace_np = trace_np.reshape(-1, num_svar, num_node, num_batch, 8).transpose( 0, 3, 1, 2, 4 )
 
+    y = np.zeros_like(x)
     trace_c = np.zeros_like(trace_np) # (num_time//num_skip, num_batch, num_svar, num_node, 8)
     for t0 in range(trace_c.shape[0]):
-        m.step_mpr(cx, conn, x, p, t0*num_skip, num_skip, dt)
+        m.step_mpr(cx, conn, x, y, p, t0*num_skip, num_skip, dt)
         trace_c[t0] = x
         # for i in range(num_svar):
         #     a, b = trace_c[t0, 0, i], trace_np[t0, 0, i]
@@ -591,9 +591,11 @@ def test_perf_step_mpr_cpp(benchmark):
     p[...,1,:] += 2.0
     p[...,5,:] /= num_node
 
+    y = np.zeros_like(x)
+
     def run1():
         # trace_c = np.zeros((num_time//num_skip, num_batch, num_svar, num_node, 8)
         for t0 in range(num_time // num_skip):
-            m.step_mpr(cx, conn, x, p, t0*num_skip, num_skip, dt)
+            m.step_mpr(cx, conn, x, y, p, t0*num_skip, num_skip, dt)
     
     benchmark(run1)

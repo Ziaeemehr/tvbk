@@ -23,9 +23,10 @@ will rebuild the C++ if required.  This also occurs on import in e.g. a Jupyter 
 
 ## next
 
-- add sde heun steppers
-- all the neural mass models
 - make first release to start integrating w/ TVB
+- all the neural mass models
+- add bold
+
 - refactor buffers
 - rm scipy dep for sparsity
 - cuda/hip/webgpu or something
