@@ -27,8 +27,11 @@ template <typename model, typename M, int width=8> void decl_step(M m)
     [](const tvbk::cxbs<width> &cx, const tvbk::conn &c,
     farr<nb::shape<-1,model::num_svar,-1,width>> &x,
     farr<nb::shape<-1,model::num_svar,-1,width>> &y,
+    farr<nb::shape<-1,model::num_svar,width>> &z,
     farr<nb::shape<-1,-1,model::num_parm,width>> &p,
-    uint32_t t0, uint32_t nt, float dt)
+    uint32_t t0, uint32_t nt, float dt,
+    nb::ndarray<uint64_t, nb::numpy, nb::device::cpu, nb::shape<-1, width, 4>> seed
+  )
     {
       std::string err_msg = "no error";
       // check x.shape[0] == p.shape[0] == cx.num_batch
@@ -43,6 +46,12 @@ template <typename model, typename M, int width=8> void decl_step(M m)
         err_msg = "x and y shapes do not match!";
         goto throw_error;
       }
+      // check z.shape
+      if (!( x.shape(0) == z.shape(0) && seed.shape(0) == x.shape(0)))
+      {
+        err_msg = "z.shape or seed.shape doesn't match x";
+        goto throw_error;
+      }
       // check x.shape[2] == cx.num_node == p.shape[1]
       if (!(x.shape(2) == cx.num_node && x.shape(2)))
       {
@@ -54,8 +63,10 @@ template <typename model, typename M, int width=8> void decl_step(M m)
         err_msg = "p.shape[1] must be num_node or 1.";
         goto throw_error;
       }
-      tvbk::step_batches<model,8>(cx, c, (float *)x.data(), (float *)y.data(), (float *)p.data(),
-        p.shape(1) == cx.num_node, t0, nt, dt);
+      tvbk::step_batches<model, 8>(cx, c, (float *)x.data(), (float *)y.data(),
+                                   (float *)z.data(), (float *)p.data(),
+                                   p.shape(1) == cx.num_node, t0, nt, dt,
+                                   (uint64_t *)seed.data());
       return;
     throw_error:
 #ifdef __EMSCRIPTEN__
@@ -65,7 +76,7 @@ template <typename model, typename M, int width=8> void decl_step(M m)
 #else
       throw std::runtime_error(err_msg);
 #endif
-    }, "cx"_a, "c"_a, "x"_a, "y"_a, "p"_a, "t0"_a, "nt"_a, "dt"_a);
+    }, "cx"_a, "c"_a, "x"_a, "y"_a, "z"_a, "p"_a, "t0"_a, "nt"_a, "dt"_a, "seed"_a);
 }
 
 NB_MODULE(tvbk_ext, m) {
