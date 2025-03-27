@@ -154,10 +154,10 @@ INLINE void randn(uint64_t *seed, int n, float *out) {
 }
 
 template <int width>
-INLINE void krandn(uint64_t **seed, float *out) {
+INLINE void scaledrandn(float *out, uint64_t *seed, float *scale) {
   #pragma omp simd
   for (int i = 0; i < width; i++)
-    out[i] = randn1(seed[i]);
+    out[i] = randn1(seed+i*4) * scale[i];
 }
 /*
  ,dPYb,                                                ,dPYb,          
@@ -462,14 +462,15 @@ _,88,_,dP   8I   Yb,,d88b, `YbadP' ,d8,   ,d8I ,dP     Y8,,d8,   ,d8b,,d88b, `Yb
 // precomputed cx1 & cx2, and updates buffer in cx
 template <typename model, int width=8>
 static void heun_step(
-  const cxb<width> &cx, float * __restrict states, 
+  const cxb<width> &cx, float * __restrict states, float * __restrict zscl,
   const float*  __restrict cx1, const float*  __restrict cx2, const float * __restrict params,
-  const uint32_t i_node, const uint32_t i_time, const float dt
+  const uint32_t i_node, const uint32_t i_time, const float dt, uint64_t *seed
 )
 {
   constexpr uint8_t nsvar = model::num_svar;
   const uint32_t num_node = cx.num_node, horizon = cx.num_time;
   float x[nsvar*width], xi[nsvar*width]={}, dx1[nsvar*width]={}, dx2[nsvar*width]={};
+  float z[width] = {};
 
   // load states
 #pragma clang loop unroll(full)
@@ -484,14 +485,21 @@ static void heun_step(
   model::template dfun<width>(dx1, x, cx1, params);
 #pragma clang loop unroll(full)
   for (int svar=0; svar < nsvar; svar++)
-      heunpred<width>(x+svar*width, xi+svar*width, dx1+svar*width, dt);
+  {
+    scaledrandn<width>(z, seed, zscl+svar*width);
+    // for (int j=0; j<width; j++) printf("z[%d] = %0.3f\n", j, z[j]);
+    sheunpred<width>(x+svar*width, xi+svar*width, dx1+svar*width, z, dt);
+  }
   model::template adhoc<width>(xi);
 
   // Heun stage 2
   model::template dfun<width>(dx2, xi, cx2, params);
 #pragma clang loop unroll(full)
   for (int svar=0; svar < nsvar; svar++)
-      heuncorr<width>(x+svar*width, dx1+svar*width, dx2+svar*width, dt);
+  {
+    scaledrandn<width>(z, seed, zscl+svar*width);
+    sheuncorr<width>(x+svar*width, dx1+svar*width, dx2+svar*width, z, dt);
+  }
   model::template adhoc<width>(x);
 #pragma clang loop unroll(full)
   for (int svar=0; svar < nsvar; svar++)
@@ -508,10 +516,12 @@ static void step_batch(
   const cxb<width> &cx, const conn &c,
   float *x, // (num_svar, num_node, width)
   float *y, // (num_svar, num_node, width)
+  float *z, // (num_svar, width)
   // TODO try x layout as (num_node, num_svar, width)
   const float *p, // (num_node, num_parm, width)
   const bool p_varies_node,
-  const uint32_t t0, const uint32_t nt, const float dt)
+  const uint32_t t0, const uint32_t nt, const float dt, uint64_t *seed // (width, 4)
+)
 {
   float cx1[width], cx2[width];
   for (uint32_t i=0; i<(model::num_svar * cx.num_node); i++)
@@ -519,9 +529,9 @@ static void step_batch(
   for (uint32_t t=t0; t<(t0+nt); t++) {
     for (uint32_t i = 0; i < cx.num_node; i++) {
       apply_all_node<width>(cx, c, t, i, cx1, cx2);
-      heun_step<model, width>(cx, x, cx1, cx2, 
+      heun_step<model, width>(cx, x, z, cx1, cx2, 
         p_varies_node ? p+i*model::num_parm*width : p,
-        i, t, dt);
+        i, t, dt, seed);
     }
     for (uint32_t i=0; i<(model::num_svar * cx.num_node); i++)
       inc<width>(y+i*width, x+i*width, 1.0f);
@@ -533,12 +543,15 @@ static void step_batch(
 template <typename model, int width=8>
 static void step_batches(
   const cxbs<width> &cx, const conn &c,
-  float *x, // (num_batch, num_svar, num_node, width)
-  float *y, // (num_batch, num_svar, num_node, width)
+  float *x, // state (num_batch, num_svar, num_node, width)
+  float *y, // t avg (num_batch, num_svar, num_node, width)
+  float *z, // noise (num_batch, num_svar, width)
   // TODO try x layout as (num_node, num_svar, width)
   const float *p, 
   const bool p_varies_node,
-  const uint32_t t0, const uint32_t nt, const float dt)
+  const uint32_t t0, const uint32_t nt, const float dt,
+  uint64_t *seed // (num_batch, width, 4)
+)
 {
 // use omp if available or emscripten since std::thread causes emscripten to fail
 #if _OPENMP || __EMSCRIPTEN__
@@ -550,6 +563,8 @@ static void step_batches(
     const float *pb;
     float *xb=x + b * model::num_svar * cx.num_node * width;
     float *yb=y + b * model::num_svar * cx.num_node * width;
+    float *zb=z + b * model::num_svar * width;
+    uint64_t *seedb=seed + b*width*4;
     // when p varies per node, shape is // (num_batch, num_node, num_parm, width)
     if (p_varies_node)
       pb = p + b * cx.num_node * model::num_parm * width;
@@ -557,10 +572,10 @@ static void step_batches(
     else
       pb = p + b * model::num_parm * width;
 #if _OPENMP || __EMSCRIPTEN__
-    step_batch<model, width>(cx.batch(b), c, xb, yb, pb, p_varies_node, t0, nt, dt);
+    step_batch<model, width>(cx.batch(b), c, xb, yb, zb, pb, p_varies_node, t0, nt, dt, seedb);
 #else
     threads.emplace_back(
-      step_batch<model, width>, cx.batch(b), c, xb, yb, pb, p_varies_node, t0, nt, dt);
+      step_batch<model, width>, cx.batch(b), c, xb, yb, zb, pb, p_varies_node, t0, nt, dt, seedb);
 #endif
   }
 

@@ -36,29 +36,33 @@ def tvbk_run_sim(sim, init_sim_state):
         print(pname, p[0, 0, i, 0])
     num_time = int(sim.simulation_length / sim.integrator.dt)
     num_skip = int(sim.monitors[0].period / sim.integrator.dt)
-    assert num_skip == 10
+    # assert num_skip == 10
     y2 = np.zeros((num_time // num_skip, 2, nr), 'f')
     k_y = np.zeros_like(x)
+    z = np.zeros((1, num_svar, 8), 'f')
+    seed = np.zeros((1, 8, 4), np.uint64)
     for t0 in range(y2.shape[0]):
-        tvbk.step_mpr(k_cx, k_conn, x, k_y, p, t0*num_skip, num_skip, sim.integrator.dt)
+        tvbk.step_mpr(k_cx, k_conn, x, k_y, z, p,
+                      t0*num_skip, num_skip, sim.integrator.dt,
+                      seed)
         y2[t0] = k_y[..., 0]
     return y2
 
 
-def make_tvb_model(simlen=1e2):
+def make_tvb_model(simlen=1e2, dt=0.1, period=1.0):
     model = tvb.models.MontbrioPazoRoxin(tau=np.r_[10.0])
     conn = tvb.connectivity.Connectivity()
     nn = 90
     conn.centres_spherical(number_of_regions=nn)
     conn.motif_chain_directed(number_of_regions=nn)
-    conn.tract_lengths += 1
+    conn.tract_lengths += 3*dt
     noise = tvb.noise.Additive(nsig=np.r_[0., 0.])
     # conn.configure()
     sim = tvb.simulator.Simulator(
         model=model,
         connectivity=conn,
-        monitors=[tvb.monitors.TemporalAverage(period=1.)],
-        integrator=tvb.integrators.HeunStochastic(dt=0.1, noise=noise),
+        monitors=[tvb.monitors.TemporalAverage(period=period)],
+        integrator=tvb.integrators.HeunStochastic(dt=dt, noise=noise),
         simulation_length=simlen,
     ).configure()
     return sim
@@ -74,20 +78,21 @@ def test_tvb1():
         np.testing.assert_allclose(y0[t, 1, :, 0], y2[t, 1], 0.01, 0.3)
 
 perf_time = 1e4
+perf_period = 1.0
 
-@pytest.mark.benchmark(group='mpr1')
-def test_tvb_perf(benchmark):
-    sim = make_tvb_model(perf_time)
-    benchmark(sim.run)
+# so slow
+# @pytest.mark.benchmark(group='mpr1')
+# def test_tvb_perf(benchmark):
+#     sim = make_tvb_model(perf_time)
+#     benchmark(sim.run)
 
 @pytest.mark.benchmark(group='mpr1')
 def test_nbmpr_perf(benchmark):
-    sim = make_tvb_model(perf_time)
-    be = nb_mpr.NbMPRBackend()
-    benchmark(lambda : be.run_sim(sim, chunksize=100))
+    sim = make_tvb_model(perf_time, perf_period)
+    benchmark(lambda : nb_mpr.NbMPRBackend().run_sim(sim, chunksize=1000))
 
 @pytest.mark.benchmark(group='mpr1')
 def test_tvbk_perf(benchmark):
-    sim = make_tvb_model(perf_time)
+    sim = make_tvb_model(perf_time, perf_period)
     init_state = sim.current_state.copy()
     benchmark(lambda : tvbk_run_sim(sim, init_state))
