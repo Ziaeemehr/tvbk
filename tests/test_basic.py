@@ -433,8 +433,10 @@ def test_step_mpr():
 
     y = np.zeros_like(x)
     trace_c = np.zeros_like(trace_np) # (num_time//num_skip, num_batch, num_svar, num_node, 8)
+    z = np.zeros((num_batch, num_svar, 8), 'f')
+    seed = np.zeros((num_batch, 8, 4), np.uint64)
     for t0 in range(trace_c.shape[0]):
-        m.step_mpr(cx, conn, x, y, p, t0*num_skip, num_skip, dt)
+        m.step_mpr(cx, conn, x, y, z, p, t0*num_skip, num_skip, dt, seed)
         trace_c[t0] = x
         # for i in range(num_svar):
         #     a, b = trace_c[t0, 0, i], trace_np[t0, 0, i]
@@ -593,9 +595,12 @@ def test_perf_step_mpr_cpp(benchmark):
 
     y = np.zeros_like(x)
 
+    z = np.zeros((num_batch, num_svar, 8), 'f')
+    seed = np.zeros((num_batch, 8, 4), np.uint64)
+
     def run1():
         # trace_c = np.zeros((num_time//num_skip, num_batch, num_svar, num_node, 8)
         for t0 in range(num_time // num_skip):
-            m.step_mpr(cx, conn, x, y, p, t0*num_skip, num_skip, dt)
+            m.step_mpr(cx, conn, x, y, z, p, t0*num_skip, num_skip, dt, seed)
     
     benchmark(run1)

@@ -73,9 +73,9 @@ def test_tvb1():
     init_sim_state = sim.current_state.copy()
     (t1, y1), = nb_mpr.NbMPRBackend().run_sim(sim, chunksize=100)
     (t0, y0), = sim.run()
-    # y2 = tvbk_run_sim(sim, init_sim_state)
-    # for t in range(100):
-        # np.testing.assert_allclose(y0[t, 1, :, 0], y2[t, 1], 0.01, 0.3)
+    y2 = tvbk_run_sim(sim, init_sim_state)
+    for t in range(100):
+        np.testing.assert_allclose(y0[t, 1, :, 0], y2[t, 1], 0.01, 0.3)
 
 perf_time = 1e4
 perf_period = 1.0
@@ -91,8 +91,8 @@ def test_nbmpr_perf(benchmark):
     sim = make_tvb_model(perf_time, perf_period)
     benchmark(lambda : nb_mpr.NbMPRBackend().run_sim(sim, chunksize=1000))
 
-# @pytest.mark.benchmark(group='mpr1')
-# def test_tvbk_perf(benchmark):
-#     sim = make_tvb_model(perf_time, perf_period)
-#     init_state = sim.current_state.copy()
-#     benchmark(lambda : tvbk_run_sim(sim, init_state))
+@pytest.mark.benchmark(group='mpr1')
+def test_tvbk_perf(benchmark):
+    sim = make_tvb_model(perf_time, perf_period)
+    init_state = sim.current_state.copy()
+    benchmark(lambda : tvbk_run_sim(sim, init_state))
